@@ -67,11 +67,18 @@ pub fn rule_query(rule: &Rule) -> StockQuery {
     }
 }
 
-/// 规则对应的查询结果键：区域、最低 CUDA、单价上限（元 × 1000）、单机至少几卡。
-/// 区域汇总数据的键是 (区域, None, None, 1)。
+/// 规则对应的查询结果键：区域、最低 CUDA、单价上限（元 × 1000）、单机至少几卡、卡型关键字（去空格转小写）。
+/// 按机器列出时只请求关键字匹配到的卡型，所以关键字必须在键里，
+/// 否则 `4090D` 和 `4090` 两条规则会共用只含 4090D 的结果。
+/// 区域汇总数据的键见 `region_key`。
 pub fn rule_key(rule: &Rule) -> QKey {
     let q = rule_query(rule);
-    (q.region_sign, q.cuda_v_from, q.price_to, rule.min_per_machine.max(1))
+    (q.region_sign, q.cuda_v_from, q.price_to, rule.min_per_machine.max(1), rule.gpu_keyword.trim().to_lowercase())
+}
+
+/// 区域汇总数据（gpu_type，算力市场顶部那排数字）的键
+pub fn region_key(region: &str) -> QKey {
+    (region.to_string(), None, None, 1, String::new())
 }
 
 /// 规则是否需要按机器列出（汇总数据不够用）
@@ -152,7 +159,7 @@ pub struct Monitor {
     last_prune: RwLock<i64>,
 }
 
-pub type QKey = (String, Option<i64>, Option<i64>, i64);
+pub type QKey = (String, Option<i64>, Option<i64>, i64, String);
 
 impl Monitor {
     pub fn new(store: Arc<Store>, token: Option<String>, web_token: Option<String>) -> Arc<Self> {
@@ -275,7 +282,7 @@ impl Monitor {
                 Ok(_) => any_ok = true,
                 Err(e) => { first_err.get_or_insert_with(|| format!("算力市场（{}）查询失败：{e}", region_name(region))); }
             }
-            results.insert((region.clone(), None, None, 1), r);
+            results.insert(region_key(region), r);
         }
 
         // 带单价 / CUDA / 单机卡数条件的规则：按机器列出再过滤求和
@@ -285,7 +292,7 @@ impl Monitor {
             if !done.insert(key.clone()) {
                 continue;
             }
-            let base = results.get(&(rule.region_sign.clone(), None, None, 1)).cloned();
+            let base = results.get(&region_key(&rule.region_sign)).cloned();
             let r = match (base, signs_of(&rule.region_sign)) {
                 (Some(Ok(items)), Some(signs)) => {
                     let kw = rule.gpu_keyword.trim().to_lowercase();
@@ -337,7 +344,7 @@ impl Monitor {
 
         let mut region_stocks = Vec::new();
         for region in &settings.regions {
-            let r = results.get(&(region.clone(), None, None, 1)).cloned()
+            let r = results.get(&region_key(region)).cloned()
                 .unwrap_or_else(|| Err(first_err.clone().unwrap_or_default()));
             if let Ok(items) = &r {
                 let _ = self.store.insert_history(ts, region, items);
@@ -351,7 +358,7 @@ impl Monitor {
         }
         // 规则用到但不在看板区域里的，也记历史
         for region in regions.iter().filter(|r| !settings.regions.contains(r)) {
-            if let Some(Ok(items)) = results.get(&(region.clone(), None, None, 1)) {
+            if let Some(Ok(items)) = results.get(&region_key(region)) {
                 let _ = self.store.insert_history(ts, region, items);
             }
         }
@@ -657,16 +664,36 @@ mod tests {
     fn per_machine_rules_use_machine_listing() {
         let plain = rule("4090", 1);
         assert!(!needs_machines(&plain));
-        assert_eq!(rule_key(&plain), ("westDC3".into(), None, None, 1));
+        assert_eq!(rule_key(&plain), ("westDC3".into(), None, None, 1, "4090".into()));
         let mut multi = rule("4090", 1);
         multi.min_per_machine = 2;
         assert!(needs_machines(&multi));
-        assert_eq!(rule_key(&multi), ("westDC3".into(), None, None, 2));
+        assert_eq!(rule_key(&multi), ("westDC3".into(), None, None, 2, "4090".into()));
         // 机器统计结果：两台机器可开 2 卡
         let items = vec![StockItem { gpu_name: "RTX 4090".into(), idle: 6, total: 0, machines: Some(2) }];
         let m = match_rule(&multi, &items).unwrap();
         assert_eq!(machines_of(&m), Some(2));
         assert_eq!(machines_of(&match_rule(&plain, &self::tests::items()).unwrap()), None);
+    }
+
+    #[test]
+    fn machine_query_key_includes_keyword() {
+        // 同区域、同条件、单机都要 2 卡，但关键字不同：必须分开查，否则 4090 规则会拿到只含 4090D 的结果
+        let mut a = rule("4090D", 1);
+        a.min_per_machine = 2;
+        let mut b = rule(" 4090 ", 1);
+        b.min_per_machine = 2;
+        assert_ne!(rule_key(&a), rule_key(&b));
+        // 关键字大小写、首尾空格不同但实际相同时仍然共用一次查询
+        let mut c = rule("4090", 1);
+        c.min_per_machine = 2;
+        assert_eq!(rule_key(&b), rule_key(&c));
+        let mut d = rule("rtx 4090", 1);
+        d.min_per_machine = 2;
+        let mut e = rule("RTX 4090", 1);
+        e.min_per_machine = 2;
+        assert_eq!(rule_key(&d), rule_key(&e));
+        assert_ne!(rule_key(&b), region_key("westDC3"));
     }
 
     #[test]
