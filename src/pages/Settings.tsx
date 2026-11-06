@@ -120,10 +120,10 @@ export default function SettingsPage({ hasToken, hasWebToken, webTokenExp }: { h
             <div className="group-label">提醒</div>
             <Group>
               <FormRow icon="wallet" label="余额低于"><Stepper value={s.low_balance_yuan} min={0} max={1000} step={5} unit="元" onChange={(v) => set("low_balance_yuan", v)} /></FormRow>
-              <FormRow icon="power" label="自动开机余额下限"><Stepper value={s.auto_min_balance_yuan} min={0} max={1000} step={5} unit="元" onChange={(v) => set("auto_min_balance_yuan", v)} /></FormRow>
+              <FormRow icon="power" label="开机余额下限"><Stepper value={s.auto_min_balance_yuan} min={0} max={1000} step={5} unit="元" onChange={(v) => set("auto_min_balance_yuan", v)} /></FormRow>
               <FormRow icon="timer" label="运行超过多久提醒关机"><Stepper value={s.long_running_hours} min={0} max={72} step={1} unit="小时" onChange={(v) => set("long_running_hours", v)} /></FormRow>
             </Group>
-            <div className="group-foot">「运行超过多久」设为 0 表示不提醒。</div>
+            <div className="group-foot">余额低于「开机余额下限」时，规则的自动创建 / 开机和手动开机普通实例都会被拦下。「运行超过多久」设为 0 表示不提醒。</div>
 
             {inTauri && (
               <>

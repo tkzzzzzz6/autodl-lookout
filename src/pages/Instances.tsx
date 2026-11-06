@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { LINKS, call, openExternal, timeFieldTs, type Instance, type InstancePage, type RegularInstance } from "../api";
 import { Icon } from "../icons";
@@ -13,6 +13,33 @@ const statusCap = (s: string) => {
   const [label, cls] = STATUS[s] ?? [s || "未知", ""];
   return <span className={`capsule ${cls}`}>{label}</span>;
 };
+/** 下一次刷新列表的间隔：成功 30 秒；出错时翻倍，最长 10 分钟（和后台监控的退避一致） */
+export function nextDelay(prev: number, ok: boolean) {
+  return ok ? 30_000 : Math.min(Math.max(prev, 30_000) * 2, 600_000);
+}
+
+/** 定时刷新列表，按 load 的结果（成功 true / 失败 false）决定下一次间隔；返回手动刷新函数 */
+function usePolling(load: () => Promise<boolean>) {
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  const delay = useRef(30_000);
+  const timer = useRef<number | undefined>(undefined);
+  const alive = useRef(true);
+  const tick = useCallback(async () => {
+    window.clearTimeout(timer.current);
+    const ok = await loadRef.current();
+    if (!alive.current) return;
+    delay.current = nextDelay(delay.current, ok);
+    timer.current = window.setTimeout(tick, delay.current);
+  }, []);
+  useEffect(() => {
+    alive.current = true;
+    tick();
+    return () => { alive.current = false; window.clearTimeout(timer.current); };
+  }, [tick]);
+  return tick;
+}
+
 const hoursSince = (ts: number | null) => (ts ? (Date.now() / 1000 - ts) / 3600 : null);
 const open = openExternal;
 
@@ -121,7 +148,7 @@ function RegularDetail({ inst, onChanged }: { inst: RegularInstance; onChanged: 
         {!running && !stopped && <span className="muted">{STATUS[inst.status]?.[0] ?? inst.status}，稍等再操作</span>}
       </div>
       <div className="group-foot" style={{ textAlign: "center" }}>
-        {stopped ? "开机要点两次确认。机器上的卡被别人占了时会开机失败，可以先用无卡模式开机传数据。" : "释放、续费、换卡等操作请在控制台进行。"}
+        {stopped ? "开机要点两次确认，并会先检查余额。机器上的卡被别人占了时会开机失败，可以先用无卡模式开机传数据。" : "释放、续费、换卡等操作请在控制台进行。"}
       </div>
 
       <div className="group-label">连接</div>
@@ -155,12 +182,13 @@ function RegularInstances() {
   const [err, setErr] = useState<string | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const load = () => {
+  const load = usePolling(() => {
     setLoading(true);
     return call<RegularInstance[]>("list_regular_instances")
-      .then((d) => { setList(d); setErr(null); }).catch((e) => setErr(String(e))).finally(() => setLoading(false));
-  };
-  useEffect(() => { load(); const id = setInterval(load, 30000); return () => clearInterval(id); }, []);
+      .then((d) => { setList(d); setErr(null); return true; })
+      .catch((e) => { setErr(`${e}（出错时会自动放慢刷新，最长 10 分钟一次）`); return false; })
+      .finally(() => setLoading(false));
+  });
   const selected = list?.find((i) => i.uuid === sel);
 
   return (
@@ -219,7 +247,7 @@ export default function InstancesPage({ hasToken, hasWebToken, go }: { hasToken:
       <h1 className="title">我的实例</h1>
       <p className="lede">
         {shown === "regular"
-          ? "你在算力市场租的容器实例，每 30 秒刷新一次。开机会开始计费，要点两次确认。"
+          ? "你在算力市场租的容器实例，每 30 秒刷新一次。开机会开始计费：要点两次确认，余额低于「开机余额下限」或同一台当天开机满 5 次时不会开机。"
           : "容器实例 Pro（开发者 Token），每 30 秒刷新一次。"}
       </p>
       {hasToken && (
@@ -251,12 +279,13 @@ function ProInstances() {
   const [sel, setSel] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const load = () => {
+  const load = usePolling(() => {
     setLoading(true);
     return call<InstancePage>("list_instances", { pageIndex: 1, pageSize: 100 })
-      .then((d) => { setData(d); setErr(null); }).catch((e) => setErr(String(e))).finally(() => setLoading(false));
-  };
-  useEffect(() => { load(); const id = setInterval(load, 30000); return () => clearInterval(id); }, []);
+      .then((d) => { setData(d); setErr(null); return true; })
+      .catch((e) => { setErr(`${e}（出错时会自动放慢刷新，最长 10 分钟一次）`); return false; })
+      .finally(() => setLoading(false));
+  });
 
   const list = data?.list ?? [];
   const selected = list.find((i) => i.uuid === sel);
