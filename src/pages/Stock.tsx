@@ -73,8 +73,8 @@ function History({ region, gpu }: { region: string; gpu: string }) {
 }
 
 /* ---------------- one GPU row ---------------- */
-function GpuRow({ region, it, watched, open, onToggle }: {
-  region: string; it: StockItem; watched: boolean; open: boolean; onToggle: () => void;
+function GpuRow({ region, regionName, marketUrl, it, watched, open, onToggle }: {
+  region: string; regionName: string; marketUrl: string; it: StockItem; watched: boolean; open: boolean; onToggle: () => void;
 }) {
   const prev = useRef(it.idle);
   const [flash, setFlash] = useState(0);
@@ -112,6 +112,7 @@ function GpuRow({ region, it, watched, open, onToggle }: {
           <motion.div className="expand" key="x" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }} transition={softSpring}>
             <History region={region} gpu={it.gpu_name} />
+            <RentBar url={marketUrl} regionName={regionName} gpu={it.gpu_name} idle={it.idle} />
           </motion.div>
         )}
       </AnimatePresence>
@@ -120,6 +121,18 @@ function GpuRow({ region, it, watched, open, onToggle }: {
 }
 
 /* ---------------- region group ---------------- */
+/** 算力市场只能预选区域，卡型要用户自己点，所以把要点哪个写出来 */
+function RentBar({ url, regionName, gpu, idle }: { url: string; regionName: string; gpu: string; idle: number }) {
+  return (
+    <div className="rent-bar">
+      <span className="muted">
+        {idle > 0 ? `打开后已选好${regionName}，在卡型里点「${gpu}」就能看到这 ${idle} 张。` : `现在没有空闲，也可以去算力市场看看其他卡型。`}
+      </span>
+      <Btn small primary={idle > 0} icon="external" onClick={() => openExternal(url)}>去算力市场租</Btn>
+    </div>
+  );
+}
+
 function RegionGroup({ rs, rules }: { rs: RegionStock; rules: Rule[] }) {
   const [open, setOpen] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
@@ -146,7 +159,7 @@ function RegionGroup({ rs, rules }: { rs: RegionStock; rules: Rule[] }) {
           <motion.div layout transition={softSpring}>
             {shown.length === 0 && <div className="empty-state">这个区域暂时没有返回显卡</div>}
             {shown.map((it) => (
-              <GpuRow key={it.gpu_name} region={rs.region} it={it} watched={watched(it.gpu_name)}
+              <GpuRow key={it.gpu_name} region={rs.region} regionName={rs.region_name} marketUrl={rs.market_url} it={it} watched={watched(it.gpu_name)}
                 open={open === it.gpu_name} onToggle={() => setOpen(open === it.gpu_name ? null : it.gpu_name)} />
             ))}
             {(showAll ? gpus.length > Math.min(primary.length, 8) : hidden > 0) ? (
@@ -218,7 +231,8 @@ export default function StockPage({ snap, go }: { snap: Snapshot | null; go: (p:
               <>
                 {snap.has_token
                   ? <Btn primary icon="power" onClick={() => go("templates")}>用模板开一台</Btn>
-                  : <Btn primary icon="external" onClick={() => openExternal(LINKS.market)}>去算力市场租</Btn>}
+                  : <Btn primary icon="external" onClick={() => openExternal(hits[0]?.market_url || LINKS.market)}>{hits.length ? `去租 ${ruleById.get(hits[0].rule_id)!.gpu_keyword}` : "去算力市场租"}</Btn>}
+                {snap.has_token && hits.length > 0 && <Btn icon="external" onClick={() => openExternal(hits[0].market_url || LINKS.market)}>去算力市场租</Btn>}
                 <Btn icon="list" onClick={() => go("rules")}>查看规则</Btn>
               </>
             )}
