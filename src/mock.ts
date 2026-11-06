@@ -19,7 +19,7 @@ let rules: Rule[] = [
 ].map(([r, g], i) => ({
   id: i + 1, name: `${r === "westDC3" ? "西北B区" : "北京B区"} ${g}`, enabled: true, region_sign: r,
   gpu_keyword: g, min_idle: 1, cuda_v_from: null, max_price_yuan: null, cooldown_minutes: 15,
-  action: "notify", template_id: null, instance_uuid: null, daily_limit: 1, last_fired_at: null,
+  action: "notify", template_id: null, instance_uuid: null, daily_limit: 1, last_fired_at: null, min_per_machine: i === 3 ? 2 : 1,
 }));
 
 let templates: Template[] = [{
@@ -47,10 +47,10 @@ const snapshot = (): Snapshot => ({
     ] },
   ],
   rules: [
-    { rule_id: 1, hit: true, idle_sum: 77, matched: ["RTX 4090×50", "RTX 4090D×27"], error: null },
-    { rule_id: 2, hit: true, idle_sum: 2, matched: ["RTX 5090×2"], error: null },
-    { rule_id: 3, hit: false, idle_sum: 0, matched: [], error: null },
-    { rule_id: 4, hit: true, idle_sum: 3, matched: ["RTX 5090×3"], error: null },
+    { rule_id: 1, hit: true, idle_sum: 77, machines: null, matched: ["RTX 4090×50", "RTX 4090D×27"], error: null },
+    { rule_id: 2, hit: true, idle_sum: 2, machines: null, matched: ["RTX 5090×2"], error: null },
+    { rule_id: 3, hit: false, idle_sum: 0, machines: null, matched: [], error: null },
+    { rule_id: 4, hit: true, idle_sum: 2, machines: 1, matched: ["RTX 5090×2"], error: null },
   ],
   balance: { assets: 187.46, accumulate: 2872.54, voucher_balance: 0 }, balance_at: now() - 60,
 });

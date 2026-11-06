@@ -47,6 +47,12 @@ pub fn match_rule(rule: &Rule, items: &[StockItem]) -> Option<RuleMatch> {
     }
 }
 
+/// 命中结果里满足条件的机器台数（只有按机器统计时才有）
+pub fn machines_of(m: &RuleMatch) -> Option<i64> {
+    let v: Vec<i64> = m.matched.iter().filter_map(|i| i.machines).collect();
+    if v.is_empty() { None } else { Some(v.iter().sum()) }
+}
+
 pub fn in_cooldown(rule: &Rule, now: i64) -> bool {
     rule.last_fired_at.map(|t| now - t < rule.cooldown_minutes.max(0) * 60).unwrap_or(false)
 }
@@ -59,6 +65,18 @@ pub fn rule_query(rule: &Rule) -> StockQuery {
         price_to: rule.max_price_yuan.map(|p| (p * 1000.0).round() as i64),
         gpu_name_set: None,
     }
+}
+
+/// 规则对应的查询结果键：区域、最低 CUDA、单价上限（元 × 1000）、单机至少几卡。
+/// 区域汇总数据的键是 (区域, None, None, 1)。
+pub fn rule_key(rule: &Rule) -> QKey {
+    let q = rule_query(rule);
+    (q.region_sign, q.cuda_v_from, q.price_to, rule.min_per_machine.max(1))
+}
+
+/// 规则是否需要按机器列出（汇总数据不够用）
+pub fn needs_machines(rule: &Rule) -> bool {
+    rule.max_price_yuan.is_some() || rule.cuda_v_from.is_some() || rule.min_per_machine > 1
 }
 
 /// 本轮需要发出的全部查询（去重）
@@ -99,6 +117,8 @@ pub struct RuleState {
     pub rule_id: i64,
     pub hit: bool,
     pub idle_sum: i64,
+    /// 按机器统计时，满足条件的机器台数
+    pub machines: Option<i64>,
     pub matched: Vec<String>,
     pub error: Option<String>,
 }
@@ -132,7 +152,7 @@ pub struct Monitor {
     last_prune: RwLock<i64>,
 }
 
-type QKey = (String, Option<i64>, Option<i64>);
+pub type QKey = (String, Option<i64>, Option<i64>, i64);
 
 impl Monitor {
     pub fn new(store: Arc<Store>, token: Option<String>, web_token: Option<String>) -> Arc<Self> {
@@ -255,30 +275,30 @@ impl Monitor {
                 Ok(_) => any_ok = true,
                 Err(e) => { first_err.get_or_insert_with(|| format!("算力市场（{}）查询失败：{e}", region_name(region))); }
             }
-            results.insert((region.clone(), None, None), r);
+            results.insert((region.clone(), None, None, 1), r);
         }
 
-        // 带单价 / CUDA 条件的规则：按机器列出再过滤求和
+        // 带单价 / CUDA / 单机卡数条件的规则：按机器列出再过滤求和
         let mut done: BTreeSet<QKey> = BTreeSet::new();
-        for rule in rules.iter().filter(|r| r.max_price_yuan.is_some() || r.cuda_v_from.is_some()) {
-            let q = rule_query(rule);
-            let key = (q.region_sign.clone(), q.cuda_v_from, q.price_to);
+        for rule in rules.iter().filter(|r| needs_machines(r)) {
+            let key = rule_key(rule);
             if !done.insert(key.clone()) {
                 continue;
             }
-            let base = results.get(&(rule.region_sign.clone(), None, None)).cloned();
+            let base = results.get(&(rule.region_sign.clone(), None, None, 1)).cloned();
             let r = match (base, signs_of(&rule.region_sign)) {
                 (Some(Ok(items)), Some(signs)) => {
                     let kw = rule.gpu_keyword.trim().to_lowercase();
+                    // 区域里这个卡型的空闲总数都不够 N 张时，不可能有单台满足，省掉一次请求
                     let names: Vec<String> = items.iter()
-                        .filter(|i| i.idle > 0 && (kw.is_empty() || i.gpu_name.to_lowercase().contains(&kw)))
+                        .filter(|i| i.idle >= rule.min_per_machine.max(1) && (kw.is_empty() || i.gpu_name.to_lowercase().contains(&kw)))
                         .map(|i| i.gpu_name.clone()).collect();
                     if names.is_empty() {
                         Ok(vec![])
                     } else {
                         tokio::time::sleep(Duration::from_millis(300)).await;
                         m.machines(&signs, &names).await
-                            .map(|slots| sum_filtered(&slots, rule.max_price_yuan, rule.cuda_v_from))
+                            .map(|slots| sum_filtered(&slots, rule.max_price_yuan, rule.cuda_v_from, rule.min_per_machine))
                             .map_err(|e| e.to_string())
                     }
                 }
@@ -317,7 +337,7 @@ impl Monitor {
 
         let mut region_stocks = Vec::new();
         for region in &settings.regions {
-            let r = results.get(&(region.clone(), None, None)).cloned()
+            let r = results.get(&(region.clone(), None, None, 1)).cloned()
                 .unwrap_or_else(|| Err(first_err.clone().unwrap_or_default()));
             if let Ok(items) = &r {
                 let _ = self.store.insert_history(ts, region, items);
@@ -331,7 +351,7 @@ impl Monitor {
         }
         // 规则用到但不在看板区域里的，也记历史
         for region in regions.iter().filter(|r| !settings.regions.contains(r)) {
-            if let Some(Ok(items)) = results.get(&(region.clone(), None, None)) {
+            if let Some(Ok(items)) = results.get(&(region.clone(), None, None, 1)) {
                 let _ = self.store.insert_history(ts, region, items);
             }
         }
@@ -340,14 +360,14 @@ impl Monitor {
         let mut rule_states = Vec::new();
         let mut hits = 0;
         for rule in &rules {
-            let q = rule_query(rule);
-            let res = results.get(&(q.region_sign.clone(), q.cuda_v_from, q.price_to));
+            let res = results.get(&rule_key(rule));
             let mut st = RuleState { rule_id: rule.id, ..Default::default() };
             match res {
                 Some(Ok(items)) => {
                     if let Some(m) = match_rule(rule, items) {
                         st.hit = true;
                         st.idle_sum = m.idle_sum;
+                        st.machines = machines_of(&m);
                         st.matched = m.matched.iter().map(|i| format!("{}×{}", i.gpu_name, i.idle)).collect();
                         hits += 1;
                         if !in_cooldown(rule, ts) {
@@ -421,7 +441,12 @@ impl Monitor {
     }
 
     async fn fire(&self, app: &AppHandle, client: Option<&Client>, rule: &Rule, m: &RuleMatch, settings: &crate::store::Settings) {
-        let what = m.matched.iter().map(|i| format!("{} 空闲 {}", i.gpu_name, i.idle)).collect::<Vec<_>>().join("，");
+        let mut what = m.matched.iter().map(|i| format!("{} 空闲 {}", i.gpu_name, i.idle)).collect::<Vec<_>>().join("，");
+        if rule.min_per_machine > 1 {
+            if let Some(n) = machines_of(m) {
+                what = format!("{n} 台机器可开 {} 卡（{what}）", rule.min_per_machine);
+            }
+        }
         let title = format!("有卡了：{}", rule.name);
         let body = format!("{} · {}", region_name(&rule.region_sign), what);
         self.log("info", "alert", Some(rule.id), &format!("{title} — {body}"));
@@ -588,14 +613,15 @@ mod tests {
             instance_uuid: None,
             daily_limit: 1,
             last_fired_at: None,
+            min_per_machine: 1,
         }
     }
 
     fn items() -> Vec<StockItem> {
         vec![
-            StockItem { gpu_name: "RTX 4090".into(), idle: 2, total: 100 },
-            StockItem { gpu_name: "RTX 4090D".into(), idle: 1, total: 50 },
-            StockItem { gpu_name: "RTX 5090".into(), idle: 0, total: 40 },
+            StockItem { gpu_name: "RTX 4090".into(), idle: 2, total: 100, machines: None },
+            StockItem { gpu_name: "RTX 4090D".into(), idle: 1, total: 50, machines: None },
+            StockItem { gpu_name: "RTX 5090".into(), idle: 0, total: 40, machines: None },
         ]
     }
 
@@ -625,6 +651,22 @@ mod tests {
         let qs = plan_queries(&["westDC3".into(), "beijingDC2".into()], &[rule("4090", 1), r2]);
         assert_eq!(qs.len(), 3);
         assert!(qs.iter().any(|q| q.price_to == Some(3500)));
+    }
+
+    #[test]
+    fn per_machine_rules_use_machine_listing() {
+        let plain = rule("4090", 1);
+        assert!(!needs_machines(&plain));
+        assert_eq!(rule_key(&plain), ("westDC3".into(), None, None, 1));
+        let mut multi = rule("4090", 1);
+        multi.min_per_machine = 2;
+        assert!(needs_machines(&multi));
+        assert_eq!(rule_key(&multi), ("westDC3".into(), None, None, 2));
+        // 机器统计结果：两台机器可开 2 卡
+        let items = vec![StockItem { gpu_name: "RTX 4090".into(), idle: 6, total: 0, machines: Some(2) }];
+        let m = match_rule(&multi, &items).unwrap();
+        assert_eq!(machines_of(&m), Some(2));
+        assert_eq!(machines_of(&match_rule(&plain, &self::tests::items()).unwrap()), None);
     }
 
     #[test]

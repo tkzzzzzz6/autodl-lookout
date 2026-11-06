@@ -278,11 +278,12 @@ pub fn parse_machines(d: &Value) -> (Vec<MachineSlot>, i64) {
     (slots, max_page)
 }
 
-/// 按单价 / CUDA 过滤后，把机器上的空闲卡按卡型加起来
-pub fn sum_filtered(slots: &[MachineSlot], max_price_yuan: Option<f64>, cuda_from: Option<i64>) -> Vec<StockItem> {
-    let mut acc: BTreeMap<String, i64> = BTreeMap::new();
+/// 按单价 / CUDA / 单机空闲卡数过滤后，把机器上的空闲卡按卡型加起来，并记下满足条件的机器台数。
+/// `min_per_machine` 为 N 时，只统计单台空闲 ≥ N 的机器——多卡训练要求同一台机器上同时空出 N 张卡。
+pub fn sum_filtered(slots: &[MachineSlot], max_price_yuan: Option<f64>, cuda_from: Option<i64>, min_per_machine: i64) -> Vec<StockItem> {
+    let mut acc: BTreeMap<String, (i64, i64)> = BTreeMap::new();
     for s in slots {
-        if s.idle <= 0 {
+        if s.idle <= 0 || s.idle < min_per_machine.max(1) {
             continue;
         }
         if let Some(p) = max_price_yuan {
@@ -295,9 +296,14 @@ pub fn sum_filtered(slots: &[MachineSlot], max_price_yuan: Option<f64>, cuda_fro
                 continue;
             }
         }
-        *acc.entry(s.gpu_name.clone()).or_default() += s.idle;
+        let e = acc.entry(s.gpu_name.clone()).or_default();
+        e.0 += s.idle;
+        e.1 += 1;
     }
-    let mut v: Vec<StockItem> = acc.into_iter().map(|(gpu_name, idle)| StockItem { gpu_name, idle, total: 0 }).collect();
+    let mut v: Vec<StockItem> = acc
+        .into_iter()
+        .map(|(gpu_name, (idle, machines))| StockItem { gpu_name, idle, total: 0, machines: Some(machines) })
+        .collect();
     v.sort_by(|a, b| b.idle.cmp(&a.idle));
     v
 }
@@ -382,13 +388,30 @@ mod tests {
         let (slots, mp) = parse_machines(&d);
         assert_eq!(mp, 1);
         assert_eq!(slots.len(), 4, "non-payg machines are skipped");
-        let all = sum_filtered(&slots, None, None);
+        let all = sum_filtered(&slots, None, None, 1);
         assert_eq!(all.iter().find(|i| i.gpu_name == "RTX 4090").unwrap().idle, 5);
-        let cheap = sum_filtered(&slots, Some(2.3), None);
+        let cheap = sum_filtered(&slots, Some(2.3), None, 1);
         assert_eq!(cheap.iter().map(|i| (i.gpu_name.as_str(), i.idle)).collect::<Vec<_>>(), vec![("RTX 4090", 2), ("RTX 4090D", 1)]);
-        let cuda = sum_filtered(&slots, None, Some(128));
+        let cuda = sum_filtered(&slots, None, Some(128), 1);
         assert_eq!(cuda.len(), 1);
         assert_eq!(cuda[0].idle, 2);
+    }
+
+    #[test]
+    fn per_machine_threshold_counts_only_big_enough_machines() {
+        let slot = |idle, price: f64, cuda| MachineSlot { gpu_name: "RTX 4090".into(), idle, price_yuan: Some(price), max_cuda: Some(cuda) };
+        // 区域里一共空 1+1+1+2+4 = 9 张，但能开 2 卡的只有后两台
+        let slots = vec![slot(1, 2.0, 132), slot(1, 2.0, 132), slot(1, 2.0, 132), slot(2, 2.5, 124), slot(4, 2.0, 132)];
+        let n1 = sum_filtered(&slots, None, None, 1);
+        assert_eq!((n1[0].idle, n1[0].machines), (9, Some(5)));
+        let n2 = sum_filtered(&slots, None, None, 2);
+        assert_eq!((n2[0].idle, n2[0].machines), (6, Some(2)));
+        let n4 = sum_filtered(&slots, None, None, 4);
+        assert_eq!((n4[0].idle, n4[0].machines), (4, Some(1)));
+        assert!(sum_filtered(&slots, None, None, 8).is_empty());
+        // 和单价、CUDA 叠加：2 卡且 ≤ ¥2.2 且 CUDA ≥ 12.8 → 只剩 4 卡那台
+        let mixed = sum_filtered(&slots, Some(2.2), Some(128), 2);
+        assert_eq!((mixed[0].idle, mixed[0].machines), (4, Some(1)));
     }
 
     #[test]
@@ -497,7 +520,7 @@ mod tests {
         let (base, h) = serve_once(r#"{"code":"Success","data":[{"RTX 4090":{"total_gpu_num":1766,"idle_gpu_num":0}},{"CPU":{"total_gpu_num":320,"idle_gpu_num":2}}],"msg":""}"#).await;
         let c = MarketClient::with_base("web.jwt.token", base);
         let items = c.gpu_types(&["west-B".into(), "west-C".into()]).await.unwrap();
-        assert_eq!(items, vec![StockItem { gpu_name: "RTX 4090".into(), idle: 0, total: 1766 }]);
+        assert_eq!(items, vec![StockItem { gpu_name: "RTX 4090".into(), idle: 0, total: 1766, machines: None }]);
         let req = h.await.unwrap();
         assert!(req.starts_with("POST /api/v1/machine/region/gpu_type "));
         assert!(req.to_lowercase().contains("authorization: web.jwt.token"));
