@@ -508,9 +508,9 @@ mod tests {
             .unwrap();
         assert_eq!(s.history("westDC3", "RTX 4090", 0).unwrap().len(), 1);
 
-        s.insert_history(100, "westDC3", &[StockItem { gpu_name: "RTX 4090D".into(), idle: 3, total: 9 }]).unwrap();
-        s.insert_history(200, "westDC3", &[StockItem { gpu_name: "RTX 4090".into(), idle: 0, total: 9 }]).unwrap();
-        s.insert_history(200, "beijingDC2", &[StockItem { gpu_name: "RTX 4090".into(), idle: 7, total: 9 }]).unwrap();
+        s.insert_history(100, "westDC3", &[StockItem { gpu_name: "RTX 4090D".into(), idle: 3, total: 9, machines: None }]).unwrap();
+        s.insert_history(200, "westDC3", &[StockItem { gpu_name: "RTX 4090".into(), idle: 0, total: 9, machines: None }]).unwrap();
+        s.insert_history(200, "beijingDC2", &[StockItem { gpu_name: "RTX 4090".into(), idle: 7, total: 9, machines: None }]).unwrap();
         // 同一时刻 4090 + 4090D 相加；不同区域不混
         assert_eq!(s.idle_series("westDC3", "4090", 0).unwrap(), vec![(100, 5), (200, 0)]);
         assert_eq!(s.idle_series("westDC3", "4090d", 0).unwrap(), vec![(100, 3)]);
