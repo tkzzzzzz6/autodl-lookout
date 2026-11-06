@@ -85,7 +85,7 @@ src-tauri/src/
   lib.rs        启动、插件、旧数据迁移
 src/
   App.tsx       顶栏（分段导航、状态胶囊、余额）+ 页面切换
-  ui.tsx        共用组件：毛玻璃列表 Group/Row/FormRow、Segmented、Switch、Stepper、Sheet、CountUp、Toast…
+  ui.tsx        共用组件：毛玻璃列表 Group/Row/FormRow、Segmented、Select、Switch、Stepper、Sheet、CountUp、Toast…
   icons.tsx     线条图标（24×24，SF Symbols 风格），和 design/ 的设计稿同源
   api.ts        前端调用封装、类型、外部链接、卡型别名
   mock.ts       浏览器预览用假数据
@@ -134,6 +134,7 @@ design/         设计稿 SVG（B2 风格）和应用图标源文件
 
 - **只做浅色**，不要加深色模式。
 - 风格：留白 + 苹果式毛玻璃（`.glass`、`Group`）、蓝白配色。颜色只用 `styles.css` 里的变量，不要写死新颜色。
+- 下拉选择用 `ui.tsx` 的 `Select`，不要用原生 `<select>`（WebView2 里是系统样式的方框列表）。
 - 图标只用 `src/icons.tsx` 里的；需要新图标就按同样的 24×24 线条风格加进去。显卡用 `gpu`（大）/ `gpu_s`（小尺寸简化版）。
 - 标题用衬线字体（`.title`、`.hero`，打包的 Noto Serif SC 子集只含 GB2312 常用字，生僻字会回退）。
 - 动效用 Motion，并保持克制：弹簧参数用 `ui.tsx` 里的 `spring` / `softSpring`；`App` 已包了 `MotionConfig reducedMotion="user"`。

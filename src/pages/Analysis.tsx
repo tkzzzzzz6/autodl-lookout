@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { call, fmtTime, type Heatmap, type HeatCell, type Rule, type Settings } from "../api";
 import { Icon } from "../icons";
-import { Group, Page, Segmented, useRefData } from "../ui";
+import { Group, Page, Segmented, Select, useRefData } from "../ui";
 
 const WEEK = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 type Metric = "hit" | "avg";
@@ -87,13 +87,13 @@ export default function AnalysisPage() {
         {regionOpts.length > 1
           ? <Segmented small layoutId="heat-region" value={region} onChange={setRegion} items={regionOpts} />
           : regionOpts[0] && <span className="capsule">{regionOpts[0].label}</span>}
-        <label className="capsule" style={{ gap: 6, paddingRight: 4 }}>
+        <span className="capsule select-capsule">
           <Icon name="gpu_s" size={15} stroke={1.8} />
-          <select className="inline-select" style={{ color: "var(--ink)" }} value={keyword} onChange={(e) => setKeyword(e.target.value)} aria-label="卡型">
-            {keywordOpts.length === 0 && <option value="">暂无卡型</option>}
-            {keywordOpts.map((k) => <option key={k} value={k}>{gpus.includes(k) ? k : `含“${k}”的卡型`}</option>)}
-          </select>
-        </label>
+          <Select label="卡型" value={keyword} onChange={setKeyword} placeholder="暂无卡型"
+            options={[...keywordOpts.filter((k) => !gpus.includes(k)), ...keywordOpts.filter((k) => gpus.includes(k))].map((k) => gpus.includes(k)
+              ? { value: k, label: k, group: "具体卡型" }
+              : { value: k, label: `含“${k}”`, sub: "合并所有匹配的卡型", group: "规则关键字" })} />
+        </span>
         <span style={{ flex: 1 }} />
         <Segmented small layoutId="heat-metric" value={metric} onChange={setMetric}
           items={[{ id: "hit", label: "有卡比例" }, { id: "avg", label: "平均空闲" }]} />

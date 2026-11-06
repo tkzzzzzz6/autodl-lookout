@@ -1,4 +1,5 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, animate, motion, useReducedMotion, type Variants } from "motion/react";
 import { call, errText, type RefData } from "./api";
 import { Icon, type IconName } from "./icons";
@@ -217,6 +218,123 @@ export function Sheet({ open, onClose, title, left, right, children }: {
         </>
       )}
     </AnimatePresence>
+  );
+}
+
+/* ---------------- select ---------------- */
+export interface SelectOption<T extends string | number | null> { value: T; label: string; sub?: string; group?: string }
+
+/**
+ * 替代原生 <select>：原生下拉在 WebView2 里是系统样式的方框列表，和毛玻璃风格不搭。
+ * 菜单挂在 body 上（不被面板的滚动区域裁掉），放不下时向上弹出；
+ * 键盘：Enter / 空格 / ↑↓ 打开，↑↓ 移动，Enter 选中，Esc / Tab 关闭，输入字符跳到以它开头的选项。
+ */
+export function Select<T extends string | number | null>({ value, options, onChange, label, placeholder = "请选择", className = "" }: {
+  value: T; options: SelectOption<T>[]; onChange: (v: T) => void; label: string; placeholder?: string; className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const [pos, setPos] = useState<{ left: number; top: number; width: number; maxH: number; up: boolean; alignLeft: boolean } | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const typed = useRef({ s: "", t: 0 });
+  const id = useId();
+  const cur = options.findIndex((o) => o.value === value);
+  const current = options[cur];
+
+  const place = useCallback(() => {
+    const r = btn.current?.getBoundingClientRect();
+    if (!r) return;
+    const width = Math.max(200, Math.min(300, r.width + 40));
+    const below = window.innerHeight - r.bottom - 12, above = r.top - 76;
+    const up = below < 220 && above > below;
+    // 按钮在窗口左半边时菜单左对齐（如抢卡时段的卡型胶囊），否则右对齐（表单行右侧的值）
+    const alignLeft = r.left + r.width / 2 < window.innerWidth / 2;
+    const left = Math.min(Math.max(12, alignLeft ? r.left - 6 : r.right - width), window.innerWidth - width - 12);
+    setPos({ left, width, up, alignLeft, top: up ? r.top - 6 : r.bottom + 6, maxH: Math.min(360, up ? above : below) });
+  }, []);
+
+  const show = (at = cur) => { place(); setActive(Math.max(0, at)); setOpen(true); };
+  const close = (focus = true) => { setOpen(false); if (focus) btn.current?.focus(); };
+  const pick = (i: number) => { const o = options[i]; if (o) onChange(o.value); close(); };
+
+  useLayoutEffect(() => { if (open) menu.current?.focus(); }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      if (!menu.current?.contains(e.target as Node) && !btn.current?.contains(e.target as Node)) close(false);
+    };
+    const reflow = () => close(false); // 窗口变化或外层滚动时直接收起，避免菜单和按钮错位
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("resize", reflow);
+    window.addEventListener("scroll", reflow, true);
+    return () => {
+      window.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("resize", reflow);
+      window.removeEventListener("scroll", reflow, true);
+    };
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (open) menu.current?.querySelector(`[data-i="${active}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [open, active]);
+
+  const jump = (ch: string) => {
+    const now = Date.now();
+    typed.current = { s: now - typed.current.t < 700 ? typed.current.s + ch : ch, t: now };
+    const q = typed.current.s.toLowerCase();
+    const i = options.findIndex((o) => o.label.toLowerCase().startsWith(q));
+    if (i >= 0) setActive(i);
+  };
+
+  const onMenuKey = (e: React.KeyboardEvent) => {
+    // 不让 Esc 等按键冒泡到外层（Sheet 在 window 上监听 Esc 关面板）
+    e.stopPropagation();
+    if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(options.length - 1, a + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(0, a - 1)); }
+    else if (e.key === "Home") { e.preventDefault(); setActive(0); }
+    else if (e.key === "End") { e.preventDefault(); setActive(options.length - 1); }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(active); }
+    else if (e.key === "Escape") { e.preventDefault(); close(); }
+    else if (e.key === "Tab") { close(); }
+    else if (e.key.length === 1) jump(e.key);
+  };
+
+  return (
+    <>
+      <button ref={btn} type="button" className={`select-btn ${open ? "open" : ""} ${className}`}
+        aria-haspopup="listbox" aria-expanded={open} aria-controls={open ? id : undefined} aria-label={`${label}：${current?.label ?? placeholder}`}
+        onClick={() => (open ? close() : show())}
+        onKeyDown={(e) => {
+          if (["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) { e.preventDefault(); e.stopPropagation(); show(); }
+        }}>
+        <span className={current ? "" : "muted"}>{current?.label ?? placeholder}</span>
+        <Icon name="updown" size={14} stroke={2.2} className="select-caret" />
+      </button>
+      {createPortal(
+        <AnimatePresence>
+          {open && pos && (
+            <motion.div ref={menu} id={id} role="listbox" aria-label={label} tabIndex={-1} className="select-menu"
+              aria-activedescendant={`${id}-${active}`} onKeyDown={onMenuKey}
+              style={{ left: pos.left, width: pos.width, maxHeight: pos.maxH, ...(pos.up ? { bottom: window.innerHeight - pos.top } : { top: pos.top }), transformOrigin: `${pos.up ? "bottom" : "top"} ${pos.alignLeft ? "left" : "right"}` }}
+              initial={{ opacity: 0, scale: .96, y: pos.up ? 6 : -6 }} animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: .97, transition: { duration: .12 } }} transition={spring}>
+              {options.map((o, i) => (
+                <React.Fragment key={String(o.value)}>
+                  {o.group && o.group !== options[i - 1]?.group && <div className="select-group" role="presentation">{o.group}</div>}
+                  <div id={`${id}-${i}`} data-i={i} role="option" aria-selected={i === cur}
+                    className={`select-opt ${i === active ? "active" : ""} ${i === cur ? "selected" : ""}`}
+                    onPointerMove={() => setActive(i)} onClick={() => pick(i)}>
+                    <span className="select-check">{i === cur && <Icon name="check" size={15} stroke={2.4} />}</span>
+                    <span className="select-label">{o.label}{o.sub && <small>{o.sub}</small>}</span>
+                  </div>
+                </React.Fragment>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body,
+      )}
+    </>
   );
 }
 

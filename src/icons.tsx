@@ -21,6 +21,7 @@ const PATHS = {
   refresh: "<path d=\"M18.5 12a6.5 6.5 0 1 1-2-4.7\"/><path d=\"M18.8 4.8v3.6h-3.6\"/>",
   list: "<path d=\"M9.5 7h10M9.5 12h10M9.5 17h10\"/><circle cx=\"5.5\" cy=\"7\" r=\"1\" fill=\"C\"/><circle cx=\"5.5\" cy=\"12\" r=\"1\" fill=\"C\"/><circle cx=\"5.5\" cy=\"17\" r=\"1\" fill=\"C\"/>",
   chev: "<path d=\"M9.5 6.5L15 12l-5.5 5.5\"/>",
+  updown: "<path d=\"M8 9.5l4-4 4 4M8 14.5l4 4 4-4\"/>",
   wallet: "<rect x=\"4\" y=\"6.5\" width=\"16\" height=\"12\" rx=\"2.5\"/><path d=\"M4 9.5h16\"/><circle cx=\"16.3\" cy=\"14\" r=\"1\" fill=\"C\"/>",
   pulse: "<path d=\"M3.5 12h4l2-5 3.5 10 2-5h5.5\"/>",
   box: "<path d=\"M4.5 8l7.5-4 7.5 4v8l-7.5 4-7.5-4z\"/><path d=\"M4.5 8l7.5 4 7.5-4M12 12v8\"/>",
