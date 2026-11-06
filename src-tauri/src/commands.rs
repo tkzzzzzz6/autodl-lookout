@@ -112,6 +112,19 @@ pub fn stock_history(st: State<'_, AppState>, region: String, gpu_name: String, 
     st.store.history(&region, &gpu_name, now() - hours.max(1) * 3600)
 }
 
+/// 抢卡时段分析：days = 0 表示用全部保留的历史
+#[tauri::command]
+pub fn stock_heatmap(st: State<'_, AppState>, region: String, keyword: String, days: i64) -> R<crate::heatmap::Heatmap> {
+    let since = if days > 0 { now() - days * 86400 } else { 0 };
+    let pts = st.store.idle_series(&region, &keyword, since)?;
+    Ok(crate::heatmap::build(&pts, &chrono::Local))
+}
+
+#[tauri::command]
+pub fn history_gpus(st: State<'_, AppState>, region: String) -> R<Vec<String>> {
+    st.store.history_gpus(&region)
+}
+
 #[tauri::command]
 pub async fn get_balance(st: State<'_, AppState>) -> R<Balance> {
     if let Some(m) = st.monitor.market() {

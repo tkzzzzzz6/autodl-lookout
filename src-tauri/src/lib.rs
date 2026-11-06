@@ -1,5 +1,6 @@
 pub mod api;
 mod commands;
+pub mod heatmap;
 pub mod market;
 pub mod monitor;
 mod notify;
@@ -67,6 +68,8 @@ pub fn run() {
             commands::ref_data,
             commands::query_stock,
             commands::stock_history,
+            commands::stock_heatmap,
+            commands::history_gpus,
             commands::get_balance,
             commands::get_settings,
             commands::save_settings,

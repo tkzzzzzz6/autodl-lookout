@@ -76,6 +76,7 @@ src-tauri/src/
   api.rs        AutoDL 官方开放 API（开发者 Token）：余额、容器实例 Pro、镜像
   market.rs     算力市场库存、余额、普通容器实例（网页登录凭证，控制台内部接口）
   monitor.rs    后台轮询：库存 → 历史 → 规则 → 通知 / 自动动作；余额、运行时长、凭证过期提醒
+  heatmap.rs    抢卡时段：库存历史按「星期 × 小时」聚合、一句话结论
   store.rs      SQLite：设置、规则、模板、库存历史、日志
   secret.rs     凭证存系统钥匙串（Windows 凭据管理器 / macOS Keychain），不可用时退回数据库
   regions.rs    区域、Pro 规格、公共镜像对照表
@@ -88,7 +89,7 @@ src/
   icons.tsx     线条图标（24×24，SF Symbols 风格），和 design/ 的设计稿同源
   api.ts        前端调用封装、类型、外部链接、卡型别名
   mock.ts       浏览器预览用假数据
-  pages/        库存、提醒规则、我的实例、创建模板、日志、设置
+  pages/        库存、提醒规则、抢卡时段、我的实例、创建模板、日志、设置
   styles.css    设计令牌和样式（仅浅色）
 design/         设计稿 SVG（B2 风格）和应用图标源文件
 ```
