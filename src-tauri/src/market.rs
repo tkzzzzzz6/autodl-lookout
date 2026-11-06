@@ -5,6 +5,8 @@
 //! - GET  /api/v1/region/list                 区域列表：region_sign（机房）→ region_name / data_center
 //! - POST /api/v1/machine/region/gpu_type     某区域各卡型 空闲/总数（算力市场顶部那一排数字）
 //! - POST /api/v1/user/machine/list           按机器列出，带单价和最高 CUDA 版本（用于带筛选条件的规则）
+//! - POST /api/v1/instance                     我的普通容器实例列表（控制台「容器实例」页）
+//! - POST /api/v1/instance/power_on / power_off 普通实例开机（可选无卡模式）/ 关机
 //!
 //! 软件里的区域代码沿用 data_center（westDC3、beijingDC2 …），一个 data_center 对应多个机房。
 
@@ -32,6 +34,32 @@ pub struct MachineSlot {
     pub price_yuan: Option<f64>,
     /// 如 "13.2" → 132
     pub max_cuda: Option<i64>,
+}
+
+/// 普通容器实例（控制台「容器实例」页）里界面要用的字段。
+/// root 密码不放在这里：列表会整体发给前端、也可能被打日志，密码只在用户点「复制」时单独取。
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct RegularInstance {
+    pub uuid: String,
+    pub name: String,
+    pub status: String,
+    pub sub_status: String,
+    pub gpu: String,
+    pub gpu_amount: i64,
+    pub region_name: String,
+    pub region_sign: String,
+    pub machine_alias: String,
+    pub charge_type: String,
+    /// 按量单价，元 / 小时
+    pub payg_price_yuan: Option<f64>,
+    pub ssh_command: String,
+    pub jupyter_url: Option<String>,
+    pub service_6006_url: Option<String>,
+    pub service_6008_url: Option<String>,
+    pub started_at: Option<i64>,
+    pub stopped_at: Option<i64>,
+    pub expired_at: Option<i64>,
+    pub has_password: bool,
 }
 
 #[derive(Clone)]
@@ -117,6 +145,95 @@ impl MarketClient {
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
         Ok(out)
+    }
+}
+
+impl MarketClient {
+    /// 我的普通容器实例（自动翻页，最多 500 台），返回原始 JSON，密码等字段由调用方决定怎么用
+    async fn instances_raw(&self) -> ApiResult<Vec<Value>> {
+        let mut out = Vec::new();
+        for page in 1..=10 {
+            let d = self
+                .call(reqwest::Method::POST, "/api/v1/instance", Some(json!({ "page_index": page, "page_size": 50 })))
+                .await?;
+            let list = d.get("list").and_then(|l| l.as_array()).cloned().unwrap_or_default();
+            let empty = list.is_empty();
+            out.extend(list);
+            let max_page = d.get("max_page").and_then(|v| v.as_i64()).unwrap_or(1);
+            if empty || page >= max_page {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        Ok(out)
+    }
+
+    pub async fn instances(&self) -> ApiResult<Vec<RegularInstance>> {
+        Ok(self.instances_raw().await?.iter().map(parse_instance).collect())
+    }
+
+    /// 只在用户点「复制密码」时调用
+    pub async fn instance_password(&self, uuid: &str) -> ApiResult<String> {
+        let list = self.instances_raw().await?;
+        list.iter()
+            .find(|i| str_of(i, "uuid") == uuid)
+            .map(|i| str_of(i, "root_password"))
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| ApiError::Api { code: "NotFound".into(), msg: "没有找到这台实例的密码，可能已经释放".into() })
+    }
+
+    /// 开机。non_gpu = true 时用无卡模式（便宜，适合传数据、改代码）
+    pub async fn power_on(&self, uuid: &str, non_gpu: bool) -> ApiResult<()> {
+        let mut body = json!({ "instance_uuid": uuid });
+        if non_gpu {
+            body["payload"] = json!("non_gpu");
+        }
+        self.call(reqwest::Method::POST, "/api/v1/instance/power_on", Some(body)).await.map(|_| ())
+    }
+
+    pub async fn power_off(&self, uuid: &str) -> ApiResult<()> {
+        self.call(reqwest::Method::POST, "/api/v1/instance/power_off", Some(json!({ "instance_uuid": uuid }))).await.map(|_| ())
+    }
+}
+
+fn str_of(v: &Value, k: &str) -> String {
+    v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string()
+}
+
+/// 控制台的拼法：端口为 0 时走 https 域名，否则走 http 代理地址 + 端口
+fn service_url(v: &Value, domain_key: &str, port_key: &str, path: &str) -> Option<String> {
+    let domain = str_of(v, domain_key);
+    let port = v.get(port_key).and_then(|p| p.as_i64()).unwrap_or(0);
+    let host = str_of(v, "proxy_host");
+    if port == 0 {
+        (!domain.is_empty()).then(|| format!("https://{domain}{path}"))
+    } else {
+        (!host.is_empty()).then(|| format!("http://{host}:{port}{path}"))
+    }
+}
+
+pub fn parse_instance(v: &Value) -> RegularInstance {
+    let token = str_of(v, "jupyter_token");
+    RegularInstance {
+        uuid: str_of(v, "uuid"),
+        name: str_of(v, "name"),
+        status: str_of(v, "status"),
+        sub_status: str_of(v, "sub_status"),
+        gpu: str_of(v, "snapshot_gpu_alias_name"),
+        gpu_amount: v.get("req_gpu_amount").and_then(|x| x.as_i64()).unwrap_or(0),
+        region_name: str_of(v, "region_name"),
+        region_sign: str_of(v, "region_sign"),
+        machine_alias: str_of(v, "machine_alias"),
+        charge_type: str_of(v, "charge_type"),
+        payg_price_yuan: v.get("payg_price").and_then(|x| x.as_f64()).filter(|p| *p > 0.0).map(|p| p / 1000.0),
+        ssh_command: str_of(v, "ssh_command"),
+        jupyter_url: service_url(v, "jupyter_domain", "jupyter_port", &format!("/jupyter?token={token}")),
+        service_6006_url: service_url(v, "service_6006_domain", "service_6006_port", ""),
+        service_6008_url: service_url(v, "service_6008_domain", "service_6008_port", ""),
+        started_at: crate::monitor::parse_time_field(v.get("started_at")),
+        stopped_at: crate::monitor::parse_time_field(v.get("stopped_at")),
+        expired_at: crate::monitor::parse_time_field(v.get("expired_at")),
+        has_password: !str_of(v, "root_password").is_empty(),
     }
 }
 
@@ -304,6 +421,75 @@ mod tests {
             req
         });
         (addr, h)
+    }
+
+    /// 字段形状来自控制台「容器实例」页的真实返回（值是假的）
+    const INSTANCE: &str = r#"{
+        "uuid": "a1b2c3d4e5-f6a7b8c9", "name": "sft", "status": "running", "sub_status": "",
+        "start_mode": "gpu", "snapshot_gpu_alias_name": "RTX 4090", "req_gpu_amount": 2,
+        "region_name": "西北B区", "region_sign": "west-B", "machine_alias": "123机",
+        "ssh_command": "ssh -p 12345 root@region-9.autodl.example", "root_password": "fake-password",
+        "jupyter_token": "jt", "jupyter_domain": "j-abc.example", "jupyter_port": 0, "proxy_host": "region-9.autodl.example",
+        "service_6006_domain": "u-6006.example", "service_6006_port": 0,
+        "service_6008_domain": "", "service_6008_port": 18008,
+        "started_at": {"Time": "2026-11-06T10:00:00+08:00", "Valid": true},
+        "stopped_at": {"Time": "0001-01-01T00:00:00Z", "Valid": false},
+        "expired_at": {"Time": "0001-01-01T00:00:00Z", "Valid": false},
+        "charge_type": "payg", "payg_price": 3760, "rent_deadline": null, "timed_shutdown_at": {"Time": "", "Valid": false}
+    }"#;
+
+    #[test]
+    fn parses_regular_instance_without_password() {
+        let v: Value = serde_json::from_str(INSTANCE).unwrap();
+        let i = parse_instance(&v);
+        assert_eq!((i.gpu.as_str(), i.gpu_amount, i.region_sign.as_str()), ("RTX 4090", 2, "west-B"));
+        assert_eq!(i.payg_price_yuan, Some(3.76));
+        assert_eq!(i.jupyter_url.as_deref(), Some("https://j-abc.example/jupyter?token=jt"));
+        assert_eq!(i.service_6006_url.as_deref(), Some("https://u-6006.example"));
+        assert_eq!(i.service_6008_url.as_deref(), Some("http://region-9.autodl.example:18008"));
+        assert_eq!(i.started_at, Some(1_793_930_400));
+        assert_eq!((i.stopped_at, i.expired_at), (None, None));
+        assert!(i.has_password);
+        let json = serde_json::to_string(&i).unwrap();
+        assert!(!json.contains("fake-password"), "密码不能出现在列表里");
+    }
+
+    #[test]
+    fn jupyter_via_proxy_port() {
+        let v = json!({ "jupyter_token": "t", "jupyter_domain": "", "jupyter_port": 8888, "proxy_host": "h.example" });
+        assert_eq!(parse_instance(&v).jupyter_url.as_deref(), Some("http://h.example:8888/jupyter?token=t"));
+        assert_eq!(parse_instance(&json!({})).jupyter_url, None);
+    }
+
+    #[tokio::test]
+    async fn instance_list_request_shape() {
+        let reply: &'static str = Box::leak(format!(r#"{{"code":"Success","data":{{"list":[{INSTANCE}],"page_index":1,"page_size":50,"max_page":1,"result_total":1}},"msg":""}}"#).into_boxed_str());
+        let (base, h) = serve_once(reply).await;
+        let c = MarketClient::with_base("web.jwt.token", base);
+        let list = c.instances().await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].uuid, "a1b2c3d4e5-f6a7b8c9");
+        let req = h.await.unwrap();
+        assert!(req.starts_with("POST /api/v1/instance "));
+        assert!(req.to_lowercase().contains("authorization: web.jwt.token"));
+        assert!(req.contains(r#""page_index":1"#) && req.contains(r#""page_size":50"#));
+    }
+
+    #[tokio::test]
+    async fn power_on_non_gpu_request_shape() {
+        let (base, h) = serve_once(r#"{"code":"Success","data":null,"msg":""}"#).await;
+        let c = MarketClient::with_base("web.jwt.token", base);
+        c.power_on("a1b2c3d4e5-f6a7b8c9", true).await.unwrap();
+        let req = h.await.unwrap();
+        assert!(req.starts_with("POST /api/v1/instance/power_on "));
+        assert!(req.contains(r#""instance_uuid":"a1b2c3d4e5-f6a7b8c9""#));
+        assert!(req.contains(r#""payload":"non_gpu""#));
+
+        let (base, h) = serve_once(r#"{"code":"Success","data":null,"msg":""}"#).await;
+        MarketClient::with_base("web.jwt.token", base).power_off("u1").await.unwrap();
+        let req = h.await.unwrap();
+        assert!(req.starts_with("POST /api/v1/instance/power_off "));
+        assert!(req.contains(r#"{"instance_uuid":"u1"}"#));
     }
 
     #[tokio::test]

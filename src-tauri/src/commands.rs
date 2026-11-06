@@ -12,6 +12,10 @@ fn client(st: &State<AppState>) -> R<Client> {
     st.monitor.client().ok_or_else(|| "这个功能用于容器实例 Pro，需要先在「设置 → 容器实例 Pro（可选）」里填写开发者 Token".to_string())
 }
 
+fn market(st: &State<AppState>) -> R<crate::market::MarketClient> {
+    st.monitor.market().ok_or_else(|| "还没有填写网页登录凭证，请到「设置」里粘贴".to_string())
+}
+
 fn s<E: ToString>(e: E) -> String {
     e.to_string()
 }
@@ -194,6 +198,35 @@ pub async fn create_from_template(st: State<'_, AppState>, id: i64) -> R<String>
     let id = client(&st)?.create_instance(&req).await.map_err(s)?;
     let _ = st.store.log(now(), "info", "manual", None, &format!("手动创建实例 {id}（模板 {}）", t.name));
     Ok(id)
+}
+
+// ---------- 普通容器实例（网页登录凭证） ----------
+
+#[tauri::command]
+pub async fn list_regular_instances(st: State<'_, AppState>) -> R<Vec<crate::market::RegularInstance>> {
+    market(&st)?.instances().await.map_err(s)
+}
+
+/// 只在用户点「复制密码」时取，不写日志
+#[tauri::command]
+pub async fn regular_instance_password(st: State<'_, AppState>, uuid: String) -> R<String> {
+    market(&st)?.instance_password(&uuid).await.map_err(s)
+}
+
+/// 手动开机会开始计费：界面上要点两次确认，这里只做手动操作，不接入规则的自动动作
+#[tauri::command]
+pub async fn regular_power_on(st: State<'_, AppState>, uuid: String, non_gpu: bool) -> R<()> {
+    market(&st)?.power_on(&uuid, non_gpu).await.map_err(s)?;
+    let mode = if non_gpu { "（无卡模式）" } else { "" };
+    let _ = st.store.log(now(), "info", "manual", None, &format!("普通实例开机{mode} {uuid}"));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn regular_power_off(st: State<'_, AppState>, uuid: String) -> R<()> {
+    market(&st)?.power_off(&uuid).await.map_err(s)?;
+    let _ = st.store.log(now(), "info", "manual", None, &format!("普通实例关机 {uuid}"));
+    Ok(())
 }
 
 // ---------- instances ----------

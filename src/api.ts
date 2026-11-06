@@ -53,6 +53,13 @@ export interface Instance {
   created_at?: string | TimeField; started_at?: TimeField; stopped_at?: TimeField;
   [k: string]: unknown;
 }
+/** 普通容器实例（网页登录凭证），时间是 Unix 秒；root 密码不在列表里，要用 regular_instance_password 单独取 */
+export interface RegularInstance {
+  uuid: string; name: string; status: string; sub_status: string; gpu: string; gpu_amount: number;
+  region_name: string; region_sign: string; machine_alias: string; charge_type: string; payg_price_yuan: number | null;
+  ssh_command: string; jupyter_url: string | null; service_6006_url: string | null; service_6008_url: string | null;
+  started_at: number | null; stopped_at: number | null; expired_at: number | null; has_password: boolean;
+}
 export interface InstancePage { list: Instance[]; result_total?: number; max_page?: number; page_index?: number }
 
 export const fmtTime = (ts: number | null | undefined) =>

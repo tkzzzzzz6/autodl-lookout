@@ -93,7 +93,7 @@ export default function App() {
           <AnimatePresence mode="wait">
             {page === "stock" && <StockPage key="stock" snap={snap} go={setPage} />}
             {page === "rules" && <RulesPage key="rules" snap={snap} />}
-            {page === "instances" && <InstancesPage key="instances" hasToken={!!snap?.has_token} go={setPage} />}
+            {page === "instances" && <InstancesPage key="instances" hasToken={!!snap?.has_token} hasWebToken={!!snap?.has_web_token} go={setPage} />}
             {page === "templates" && <TemplatesPage key="templates" hasToken={!!snap?.has_token} />}
             {page === "logs" && <LogsPage key="logs" />}
             {page === "settings" && <SettingsPage key="settings" hasToken={!!snap?.has_token} hasWebToken={!!snap?.has_web_token} webTokenExp={snap?.web_token_exp ?? null} />}

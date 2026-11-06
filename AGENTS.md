@@ -74,7 +74,7 @@ npm run tauri build    # 打安装包，产物在 src-tauri/target/release/bundl
 ```
 src-tauri/src/
   api.rs        AutoDL 官方开放 API（开发者 Token）：余额、容器实例 Pro、镜像
-  market.rs     算力市场库存（网页登录凭证，控制台内部接口）
+  market.rs     算力市场库存、余额、普通容器实例（网页登录凭证，控制台内部接口）
   monitor.rs    后台轮询：库存 → 历史 → 规则 → 通知 / 自动动作；余额、运行时长、凭证过期提醒
   store.rs      SQLite：设置、规则、模板、库存历史、日志
   secret.rs     凭证存系统钥匙串（Windows 凭据管理器 / macOS Keychain），不可用时退回数据库
@@ -97,7 +97,7 @@ design/         设计稿 SVG（B2 风格）和应用图标源文件
 
 | 凭证 | 用途 | 接口 | 是否必填 |
 |---|---|---|---|
-| 网页登录凭证（JWT，浏览器 `localStorage.token`） | 库存、余额 | `www.autodl.com/api/v1/...`（控制台内部接口） | 必填 |
+| 网页登录凭证（JWT，浏览器 `localStorage.token`） | 库存、余额、普通容器实例 | `www.autodl.com/api/v1/...`（控制台内部接口） | 必填 |
 | 开发者 Token | 容器实例 Pro 的列表 / 开关机 / 创建 / 镜像 | `api.autodl.com/api/v1/dev/...`（官方开放 API） | 可选 |
 
 为什么库存不用官方的 `dev/machine/region/gpu_stock`：它是「弹性部署可调度」口径。2026-11-06 同一分钟实测，西北B区 RTX 4090 官方接口显示 34 张空闲，控制台算力市场是 0 张。用户要的是「现在能不能租到」，所以库存只用算力市场的数据（`market.rs`）。不要再把库存切回 `gpu_stock`。
@@ -108,6 +108,7 @@ design/         设计稿 SVG（B2 风格）和应用图标源文件
 - `POST /api/v1/machine/region/gpu_type`，body `{"region_sign_list": [...]}`：各卡型空闲 / 总数，和算力市场顶部数字一致。
 - `POST /api/v1/user/machine/list`：按机器列出，带 `payg_price`（元 × 1000，每卡每小时）和 `highest_cuda_version`，用于带单价 / CUDA 条件的规则。
 - `GET  /api/v1/wallet`：余额（元 × 1000）。
+- `POST /api/v1/instance`，body `{"page_index", "page_size"}`：我的普通容器实例；`POST /api/v1/instance/power_on` / `power_off`，body `{"instance_uuid"}`，无卡模式开机加 `"payload": "non_gpu"`。普通实例只做手动开关机，不接规则的自动动作；root 密码只在用户点复制时单独取，不放进列表、不写日志。
 
 这些接口不是官方开放的，随时可能变。改动相关代码时，返回格式的测试要用真实返回的字段形状（见 `market.rs` 里的测试）。
 
