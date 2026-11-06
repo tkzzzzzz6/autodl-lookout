@@ -166,7 +166,12 @@ export function Row({ icon, grey, badge, label, dim, sub, value, right, chevron,
   if (!onClick) return <div className={`group-row ${selected ? "selected" : ""}`}>{inner}</div>;
   return (
     <motion.div role="button" tabIndex={0} className={`group-row tappable ${selected ? "selected" : ""}`}
-      onClick={onClick} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        // 行里的按钮、开关等自己处理键盘；只有焦点在行本身时才打开
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
+      }}
       whileTap={{ scale: .985 }} transition={spring}>
       {inner}
     </motion.div>
