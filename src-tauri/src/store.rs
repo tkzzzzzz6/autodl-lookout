@@ -391,6 +391,31 @@ impl Store {
         rows.collect::<Result<Vec<_>, _>>().map_err(e)
     }
 
+    /// 某区域里名字包含关键字（不区分大小写）的卡型，每个采样时刻的空闲数之和。
+    /// 用于时段分析：「4090」会把 RTX 4090 和 RTX 4090D 加在一起，和提醒规则的口径一致。
+    pub fn idle_series(&self, region: &str, keyword: &str, since_ts: i64) -> R<Vec<(i64, i64)>> {
+        let c = self.conn.lock().unwrap();
+        let mut st = c
+            .prepare(
+                "SELECT ts, SUM(idle) FROM stock_history
+                 WHERE region=?1 AND ts>=?2 AND instr(lower(gpu_name), lower(?3)) > 0
+                 GROUP BY ts ORDER BY ts",
+            )
+            .map_err(e)?;
+        let rows = st.query_map(params![region, since_ts, keyword.trim()], |r| Ok((r.get(0)?, r.get(1)?))).map_err(e)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(e)
+    }
+
+    /// 某区域历史里出现过的卡型（按出现次数排序），给时段分析的下拉框用
+    pub fn history_gpus(&self, region: &str) -> R<Vec<String>> {
+        let c = self.conn.lock().unwrap();
+        let mut st = c
+            .prepare("SELECT gpu_name FROM stock_history WHERE region=?1 GROUP BY gpu_name ORDER BY COUNT(*) DESC, gpu_name")
+            .map_err(e)?;
+        let rows = st.query_map([region], |r| r.get(0)).map_err(e)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(e)
+    }
+
     pub fn prune(&self, keep_days: i64, now: i64) -> R<()> {
         let cutoff = now - keep_days.max(1) * 86400;
         let c = self.conn.lock().unwrap();
@@ -482,6 +507,15 @@ mod tests {
         s.insert_history(100, "westDC3", &[StockItem { gpu_name: "RTX 4090".into(), idle: 2, total: 9, machines: None }])
             .unwrap();
         assert_eq!(s.history("westDC3", "RTX 4090", 0).unwrap().len(), 1);
+
+        s.insert_history(100, "westDC3", &[StockItem { gpu_name: "RTX 4090D".into(), idle: 3, total: 9 }]).unwrap();
+        s.insert_history(200, "westDC3", &[StockItem { gpu_name: "RTX 4090".into(), idle: 0, total: 9 }]).unwrap();
+        s.insert_history(200, "beijingDC2", &[StockItem { gpu_name: "RTX 4090".into(), idle: 7, total: 9 }]).unwrap();
+        // 同一时刻 4090 + 4090D 相加；不同区域不混
+        assert_eq!(s.idle_series("westDC3", "4090", 0).unwrap(), vec![(100, 5), (200, 0)]);
+        assert_eq!(s.idle_series("westDC3", "4090d", 0).unwrap(), vec![(100, 3)]);
+        assert_eq!(s.idle_series("westDC3", "4090", 150).unwrap(), vec![(200, 0)]);
+        assert_eq!(s.history_gpus("westDC3").unwrap(), vec!["RTX 4090".to_string(), "RTX 4090D".to_string()]);
 
         s.log(10, "info", "auto", Some(7), "x").unwrap();
         assert_eq!(s.auto_actions_since(7, 0).unwrap(), 1);

@@ -9,9 +9,10 @@ import RulesPage from "./pages/Rules";
 import InstancesPage from "./pages/Instances";
 import TemplatesPage from "./pages/Templates";
 import LogsPage from "./pages/Logs";
+import AnalysisPage from "./pages/Analysis";
 import SettingsPage from "./pages/Settings";
 
-export type PageId = "stock" | "rules" | "instances" | "templates" | "logs" | "settings";
+export type PageId = "stock" | "rules" | "analysis" | "instances" | "templates" | "logs" | "settings";
 
 function useNow() {
   const [n, setN] = useState(() => Math.floor(Date.now() / 1000));
@@ -53,6 +54,7 @@ export default function App() {
   const tabs: SegItem<PageId>[] = [
     { id: "stock", label: "库存" },
     { id: "rules", label: "提醒规则", badge: hits },
+    { id: "analysis", label: "抢卡时段" },
     { id: "instances", label: "我的实例" },
     { id: "templates", label: "创建模板" },
     { id: "logs", label: "日志" },
@@ -95,6 +97,7 @@ export default function App() {
             {page === "rules" && <RulesPage key="rules" snap={snap} />}
             {page === "instances" && <InstancesPage key="instances" hasToken={!!snap?.has_token} hasWebToken={!!snap?.has_web_token} go={setPage} />}
             {page === "templates" && <TemplatesPage key="templates" hasToken={!!snap?.has_token} />}
+            {page === "analysis" && <AnalysisPage key="analysis" />}
             {page === "logs" && <LogsPage key="logs" />}
             {page === "settings" && <SettingsPage key="settings" hasToken={!!snap?.has_token} hasWebToken={!!snap?.has_web_token} webTokenExp={snap?.web_token_exp ?? null} />}
           </AnimatePresence>

@@ -48,6 +48,8 @@ export interface Template {
 }
 export interface LogEntry { id: number; ts: number; level: string; kind: string; rule_id: number | null; message: string }
 export interface HistoryPoint { ts: number; idle: number; total: number }
+export interface HeatCell { weekday: number; hour: number; samples: number; hit_ratio: number | null; avg_idle: number | null }
+export interface Heatmap { cells: HeatCell[]; samples: number; first_ts: number | null; last_ts: number | null; summary: string | null }
 export interface TimeField { Time: string; Valid: boolean }
 export interface Instance {
   uuid: string; name: string; status: string; sub_status?: string; region_sign: string; region_name?: string;
