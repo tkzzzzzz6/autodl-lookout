@@ -63,6 +63,9 @@ pub fn build<Tz: TimeZone>(points: &[(i64, i64)], tz: &Tz) -> Heatmap {
 }
 
 /// 找出全天里有卡比例最高的连续 3 小时（跨午夜也算），再看工作日和周末差别大不大。
+///
+/// 「几乎没有空闲」只看全部采样的有卡比例，不看 3 小时窗口：软件只开了一部分时段时，
+/// 有卡的小时可能凑不成完整的 3 小时窗口，不能因此下「没有空闲」的结论。
 pub fn summarize(cells: &[HeatCell]) -> Option<String> {
     let ratio = |pred: &dyn Fn(&HeatCell) -> bool, hour: u32| -> Option<f64> {
         let (mut n, mut hit) = (0i64, 0f64);
@@ -76,9 +79,17 @@ pub fn summarize(cells: &[HeatCell]) -> Option<String> {
     };
     let all = |_: &HeatCell| true;
     let by_hour: Vec<Option<f64>> = (0..24).map(|h| ratio(&all, h)).collect();
-    if by_hour.iter().all(|r| r.is_none()) {
+
+    // 全部采样的有卡比例
+    let (n_all, hit_all) = cells.iter().filter_map(|c| c.hit_ratio.map(|r| (c.samples, r * c.samples as f64)))
+        .fold((0i64, 0f64), |(n, h), (cn, ch)| (n + cn, h + ch));
+    if n_all == 0 {
         return None;
     }
+    if hit_all / (n_all as f64) < 0.01 {
+        return Some("这段时间里几乎没有空闲，可以把规则的冷却时间调短，或者换个区域看看。".into());
+    }
+
     let mut best: Option<(u32, f64)> = None;
     for start in 0..24u32 {
         let vals: Vec<f64> = (0..3).filter_map(|k| by_hour[((start + k) % 24) as usize]).collect();
@@ -90,12 +101,22 @@ pub fn summarize(cells: &[HeatCell]) -> Option<String> {
             best = Some((start, avg));
         }
     }
-    let (start, avg) = best?;
-    if avg <= 0.0 {
-        return Some("这段时间里几乎没有空闲，可以把规则的冷却时间调短，或者换个区域看看。".into());
-    }
-    let end = (start + 3) % 24;
-    let mut s = format!("每天 {start:02}:00–{end:02}:00 最容易有卡（有卡比例约 {:.0}%）", avg * 100.0);
+    let mut s = match best.filter(|(_, avg)| *avg > 0.0) {
+        Some((start, avg)) => {
+            let end = (start + 3) % 24;
+            format!("每天 {start:02}:00–{end:02}:00 最容易有卡（有卡比例约 {:.0}%）", avg * 100.0)
+        }
+        None => {
+            // 有卡的小时凑不成完整的 3 小时窗口：报有卡比例最高的单个小时，并提示覆盖不全
+            let (h, r) = by_hour.iter().enumerate()
+                .filter_map(|(h, r)| r.map(|r| (h as u32, r)))
+                .fold((0u32, -1f64), |b, x| if x.1 > b.1 + 1e-9 { x } else { b });
+            return Some(format!(
+                "目前只采到一天里的部分时段，其中 {h:02}:00–{:02}:00 最容易有卡（有卡比例约 {:.0}%）。软件多开几个时段，结论会更准。",
+                (h + 1) % 24, r * 100.0
+            ));
+        }
+    };
 
     let weekday = |c: &HeatCell| c.weekday < 5;
     let weekend = |c: &HeatCell| c.weekday >= 5;
@@ -184,6 +205,21 @@ mod tests {
         }
         let s = build(&pts, &cst()).summary.unwrap();
         assert!(s.contains("周末比工作日更容易抢到"), "{s}");
+    }
+
+    #[test]
+    fn partial_coverage_is_not_reported_as_never_available() {
+        // 连续两天只在 00、01、02、10 点采样，只有 10 点有卡：
+        // 10 点凑不成完整的 3 小时窗口，但不能说「几乎没有空闲」
+        let mut pts = vec![];
+        for day in 0..2 {
+            for h in [0, 1, 2, 10] {
+                pts.push((MON0 + day * 86400 + h * 3600, if h == 10 { 2 } else { 0 }));
+            }
+        }
+        let s = build(&pts, &cst()).summary.unwrap();
+        assert!(!s.contains("几乎没有空闲"), "{s}");
+        assert!(s.contains("10:00–11:00") && s.contains("100%") && s.contains("部分时段"), "{s}");
     }
 
     #[test]

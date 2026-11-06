@@ -25,7 +25,7 @@ export default function AnalysisPage() {
   const [hover, setHover] = useState<HeatCell | null>(null);
 
   useEffect(() => {
-    call<Settings>("get_settings").then((s) => { setSettings(s); setRegion((r) => r || s.regions[0] || "westDC3"); });
+    call<Settings>("get_settings").then(setSettings);
     call<Rule[]>("list_rules").then(setRules);
   }, []);
 
@@ -40,6 +40,11 @@ export default function AnalysisPage() {
     const ks = rules.filter((r) => r.region_sign === region && r.gpu_keyword.trim()).map((r) => r.gpu_keyword.trim());
     return [...new Set([...ks, ...gpus])];
   }, [rules, region, gpus]);
+
+  // 区域从「首页区域 + 规则区域」里选：首页区域可以全部取消、只靠规则监控别的区域
+  useEffect(() => {
+    if (regionOpts.length && !regionOpts.some((o) => o.id === region)) setRegion(regionOpts[0].id);
+  }, [regionOpts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!region) return;
