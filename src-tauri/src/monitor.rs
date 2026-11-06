@@ -379,13 +379,11 @@ impl Monitor {
                 });
             }
         }
-        if let Some(client) = &client {
-            // 4) 长时间运行的 Pro 实例（每 5 分钟，开发者 Token）
-            let last_inst = *self.last_instances_check.read().unwrap();
-            if ts - last_inst >= 300 {
-                *self.last_instances_check.write().unwrap() = ts;
-                self.check_long_running(app, client, settings.long_running_hours).await;
-            }
+        // 4) 长时间运行的实例（每 5 分钟）：普通实例用网页凭证，Pro 实例用开发者 Token
+        let last_inst = *self.last_instances_check.read().unwrap();
+        if ts - last_inst >= 300 && (market.is_some() || client.is_some()) {
+            *self.last_instances_check.write().unwrap() = ts;
+            self.check_long_running(app, market.as_ref(), client.as_ref(), settings.long_running_hours).await;
         }
 
         // 5) 网页凭证快过期时提醒一次
@@ -514,29 +512,44 @@ impl Monitor {
         }
     }
 
-    async fn check_long_running(&self, app: &AppHandle, client: &Client, hours: f64) {
+    async fn check_long_running(&self, app: &AppHandle, market: Option<&MarketClient>, client: Option<&Client>, hours: f64) {
         if hours <= 0.0 {
             return;
         }
-        let Ok(data) = client.list_instances(1, 100).await else { return };
-        let list = data.get("list").and_then(|l| l.as_array()).cloned().unwrap_or_default();
-        let ts = now();
-        for inst in list {
-            let status = inst.get("status").and_then(|s| s.as_str()).unwrap_or("");
-            if status != "running" {
-                continue;
+        // (uuid, 名称, 开机时间)
+        let mut running: Vec<(String, String, i64)> = Vec::new();
+        if let Some(m) = market {
+            if let Ok(list) = m.instances().await {
+                running.extend(list.into_iter().filter(|i| i.status == "running").filter_map(|i| {
+                    let name = if i.name.is_empty() { format!("{} {}", i.region_name, i.machine_alias).trim().to_string() } else { i.name };
+                    i.started_at.map(|t| (i.uuid, name, t))
+                }));
             }
-            let Some(started) = parse_time_field(inst.get("started_at")) else { continue };
+        }
+        if let Some(c) = client {
+            if let Ok(data) = c.list_instances(1, 100).await {
+                for inst in data.get("list").and_then(|l| l.as_array()).cloned().unwrap_or_default() {
+                    if inst.get("status").and_then(|s| s.as_str()) != Some("running") {
+                        continue;
+                    }
+                    let Some(started) = parse_time_field(inst.get("started_at")) else { continue };
+                    let uuid = inst.get("uuid").and_then(|s| s.as_str()).unwrap_or("?").to_string();
+                    let name = inst.get("name").and_then(|s| s.as_str()).filter(|s| !s.is_empty()).unwrap_or(&uuid).to_string();
+                    running.push((uuid, name, started));
+                }
+            }
+        }
+        let ts = now();
+        for (uuid, name, started) in running {
             let ran_h = (ts - started) as f64 / 3600.0;
             if ran_h < hours {
                 continue;
             }
-            let uuid = inst.get("uuid").and_then(|s| s.as_str()).unwrap_or("?");
             let key = format!("long_alert:{uuid}:{started}");
             if self.store.kv_get(&key).ok().flatten().is_some() {
                 continue;
             }
-            let name = inst.get("name").and_then(|s| s.as_str()).filter(|s| !s.is_empty()).unwrap_or(uuid);
+            let name = if name.is_empty() { uuid.clone() } else { name };
             let msg = format!("{name} 已连续运行 {ran_h:.1} 小时，记得关机");
             self.log("warn", "long_running", None, &msg);
             crate::notify::send(app, "实例运行时间较长", &msg);

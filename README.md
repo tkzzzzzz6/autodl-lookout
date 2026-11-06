@@ -1,7 +1,7 @@
 # AutoDL Lookout · 显卡管家
 
 基于 AutoDL 开放 API 的桌面工具（Tauri 2 + Rust + React）：
-监控各区域空闲显卡、有卡时发系统通知（可选自动创建 / 开机）、管理容器实例 Pro、余额和长时间运行提醒。
+监控各区域空闲显卡、有卡时发系统通知（可选自动创建 / 开机 Pro 实例）、管理普通容器实例和容器实例 Pro、余额和长时间运行提醒。
 
 ## 运行
 
@@ -31,7 +31,7 @@ npm run tauri build    # 打包安装包（Windows 是 .msi / .exe，macOS 是 .
 |---|---|
 | 库存 | 每个区域每种卡的空闲数，一格一张卡；点开看 24h / 3 天 / 7 天历史 |
 | 提醒规则 | 区域 + 卡型关键字 + 空闲门槛 (+ 单价上限 / 最低 CUDA)，冷却时间内不重复提醒；可选「自动创建实例」或「自动开机」 |
-| 我的实例 | 列表、开机 / 关机 / 释放、复制 SSH 和密码、打开 Jupyter / 6006 / 6008、保存镜像 |
+| 我的实例 | 普通容器实例（网页凭证）：列表、开机（含无卡模式，点两次确认）/ 关机、复制 SSH 和密码、打开 Jupyter / 6006 / 6008；填了开发者 Token 时还能管理容器实例 Pro（释放、保存镜像） |
 | 创建模板 | 卡型、卡数、镜像、CUDA、系统盘、开机命令，一键创建 |
 | 日志 | 提醒、自动动作、手动操作记录 |
 | 设置 | Token、看板区域、轮询间隔、余额提醒线、自动动作余额下限、运行时长提醒、开机自启 |
@@ -51,7 +51,8 @@ npm run tauri build    # 打包安装包（Windows 是 .msi / .exe，macOS 是 .
 |---|---|
 | 余额 | `POST /api/v1/dev/wallet/balance` |
 | 库存 | 控制台内部接口（网页凭证）：`GET /api/v1/region/list`、`POST /api/v1/machine/region/gpu_type`、`POST /api/v1/user/machine/list`（带单价 / CUDA 条件的规则） |
-| 实例 | `POST /api/v1/dev/instance/pro/{create,list,power_on,power_off,release}`、`GET .../snapshot`、`GET .../status` |
+| 普通实例 | 控制台内部接口（网页凭证）：`POST /api/v1/instance`、`POST /api/v1/instance/power_on`、`.../power_off` |
+| Pro 实例 | `POST /api/v1/dev/instance/pro/{create,list,power_on,power_off,release}`、`GET .../snapshot`、`GET .../status` |
 | 镜像 | `POST /api/v1/dev/instance/pro/image/save`、`.../image/private/list` |
 
 注意：

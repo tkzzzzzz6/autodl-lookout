@@ -1,5 +1,5 @@
 // 浏览器预览用的假数据（`npm run dev` 直接在浏览器里打开时生效；在 Tauri 里不会用到）
-import type { Rule, Settings, Snapshot, Template } from "./api";
+import type { RegularInstance, Rule, Settings, Snapshot, Template } from "./api";
 
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -55,6 +55,18 @@ const snapshot = (): Snapshot => ({
   balance: { assets: 187.46, accumulate: 2872.54, voucher_balance: 0 }, balance_at: now() - 60,
 });
 
+let regular: RegularInstance[] = [
+  { uuid: "a1b2c3d4e5-f6a7b8c9", name: "qwen-lora", status: "running", sub_status: "", gpu: "RTX 4090", gpu_amount: 2,
+    region_name: "西北B区", region_sign: "west-B", machine_alias: "128机", charge_type: "payg", payg_price_yuan: 3.76,
+    ssh_command: "ssh -p 32145 root@region-9.autodl.example", jupyter_url: "https://example.invalid/jupyter?token=x",
+    service_6006_url: "https://example.invalid/6006", service_6008_url: null,
+    started_at: now() - 9.3 * 3600, stopped_at: null, expired_at: null, has_password: true },
+  { uuid: "b7c8d9e0f1-a2b3c4d5", name: "", status: "shutdown", sub_status: "", gpu: "RTX 3090", gpu_amount: 1,
+    region_name: "北京B区", region_sign: "bj-B1", machine_alias: "41机", charge_type: "payg", payg_price_yuan: 1.58,
+    ssh_command: "ssh -p 40211 root@region-4.autodl.example", jupyter_url: null, service_6006_url: null, service_6008_url: null,
+    started_at: null, stopped_at: now() - 2 * 86400, expired_at: null, has_password: true },
+];
+
 const instances = {
   result_total: 2, max_page: 1, page_index: 1,
   list: [
@@ -100,6 +112,10 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     },
     delete_template: () => { templates = templates.filter((t) => t.id !== a.id); },
     list_instances: () => instances,
+    list_regular_instances: () => regular,
+    regular_instance_password: () => "xxxxxx",
+    regular_power_on: () => { regular = regular.map((i) => (i.uuid === a.uuid ? { ...i, status: "running", started_at: now() } : i)); },
+    regular_power_off: () => { regular = regular.map((i) => (i.uuid === a.uuid ? { ...i, status: "shutdown", started_at: null, stopped_at: now() } : i)); },
     instance_snapshot: () => ({
       ssh_command: "ssh -p 32145 root@connect.westb.seetacloud.com", root_password: "xxxxxx",
       jupyter_domain: "https://example.invalid/jupyter", service_6006_domain: "https://example.invalid/6006",
