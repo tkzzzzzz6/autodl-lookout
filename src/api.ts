@@ -20,8 +20,8 @@ export interface Opt { value: string; label: string }
 export interface RefData { regions: Opt[]; pro_regions: Opt[]; gpu_specs: Opt[]; base_images: Opt[] }
 export interface StockItem { gpu_name: string; idle: number; total: number }
 export interface Balance { assets: number; accumulate: number; voucher_balance: number }
-export interface RegionStock { region: string; region_name: string; items: StockItem[]; error: string | null }
-export interface RuleState { rule_id: number; hit: boolean; idle_sum: number; machines: number | null; matched: string[]; error: string | null }
+export interface RegionStock { region: string; region_name: string; items: StockItem[]; error: string | null; market_url: string }
+export interface RuleState { rule_id: number; hit: boolean; idle_sum: number; machines: number | null; matched: string[]; error: string | null; market_url: string }
 export interface Snapshot {
   has_token: boolean; has_web_token: boolean; web_token_exp: number | null; paused: boolean; running: boolean;
   last_run_at: number | null; next_run_at: number | null; last_error: string | null;

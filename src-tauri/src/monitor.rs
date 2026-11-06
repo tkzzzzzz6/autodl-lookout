@@ -117,6 +117,8 @@ pub struct RegionStock {
     pub region_name: String,
     pub items: Vec<StockItem>,
     pub error: Option<String>,
+    /// 算力市场链接（预选这个区域），用于「去租」按钮
+    pub market_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -128,6 +130,7 @@ pub struct RuleState {
     pub machines: Option<i64>,
     pub matched: Vec<String>,
     pub error: Option<String>,
+    pub market_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -258,6 +261,13 @@ impl Monitor {
         Ok(fresh)
     }
 
+    /// 用缓存的区域表拼算力市场链接；还没拿到区域表时退回不带区域的链接
+    fn market_url_of(&self, data_center: &str) -> String {
+        let cache = self.regions_cache.read().unwrap();
+        let signs = cache.1.iter().find(|r| r.data_center == data_center).map(|r| r.signs.clone()).unwrap_or_default();
+        crate::market::market_url(&signs)
+    }
+
     /// 查算力市场库存。返回 (查询结果, 是否有一次成功, 第一条错误)
     async fn fetch_market(&self, m: &MarketClient, regions: &[String], rules: &[Rule])
         -> (HashMap<QKey, Result<Vec<StockItem>, String>>, bool, Option<String>) {
@@ -354,6 +364,7 @@ impl Monitor {
                 region_name: region_name(region),
                 items: r.clone().unwrap_or_default(),
                 error: r.err().filter(|e| !e.is_empty()),
+                market_url: self.market_url_of(region),
             });
         }
         // 规则用到但不在看板区域里的，也记历史
@@ -368,7 +379,7 @@ impl Monitor {
         let mut hits = 0;
         for rule in &rules {
             let res = results.get(&rule_key(rule));
-            let mut st = RuleState { rule_id: rule.id, ..Default::default() };
+            let mut st = RuleState { rule_id: rule.id, market_url: self.market_url_of(&rule.region_sign), ..Default::default() };
             match res {
                 Some(Ok(items)) => {
                     if let Some(m) = match_rule(rule, items) {

@@ -14,6 +14,12 @@ let settings: Settings = {
   long_running_hours: 8, auto_min_balance_yuan: 10, history_keep_days: 14,
 };
 
+// 机房代码来自真实的 region/list：西北B区第一个机房 west-B，北京B区 bj-B1
+const MKT: Record<string, string> = {
+  westDC3: "https://www.autodl.com/market/list?region=west-B",
+  beijingDC2: "https://www.autodl.com/market/list?region=bj-B1",
+};
+const ruleUrl = (id: number) => MKT[rules.find((r) => r.id === id)?.region_sign ?? ""] ?? "https://www.autodl.com/market/list";
 let rules: Rule[] = [
   ["westDC3", "4090"], ["westDC3", "5090"], ["beijingDC2", "4090"], ["beijingDC2", "5090"],
 ].map(([r, g], i) => ({
@@ -33,24 +39,24 @@ const snapshot = (): Snapshot => ({
   has_token: true, has_web_token: true, web_token_exp: now() + 59 * 86400, paused: false, running: false, last_run_at: now() - 12, next_run_at: now() + 48,
   last_error: null, interval_secs: 60,
   regions: [
-    { region: "westDC3", region_name: "西北B区", error: null, items: [
+    { region: "westDC3", region_name: "西北B区", error: null, market_url: MKT.westDC3, items: [
       { gpu_name: "vGPU-32GB", idle: 103, total: 2528 }, { gpu_name: "RTX 3080 Ti", idle: 60, total: 376 },
       { gpu_name: "RTX 4090", idle: 50, total: 1766 }, { gpu_name: "RTX 4090D", idle: 27, total: 1048 },
       { gpu_name: "vGPU-48GB", idle: 9, total: 970 }, { gpu_name: "RTX 6000D", idle: 7, total: 456 },
       { gpu_name: "RTX 5090", idle: 2, total: 2048 }, { gpu_name: "H800", idle: 1, total: 96 },
       { gpu_name: "RTX 5090 D", idle: 0, total: 240 }, { gpu_name: "RTX PRO 6000", idle: 0, total: 1588 },
     ] },
-    { region: "beijingDC2", region_name: "北京B区", error: null, items: [
+    { region: "beijingDC2", region_name: "北京B区", error: null, market_url: MKT.beijingDC2, items: [
       { gpu_name: "RTX 3080 Ti", idle: 21, total: 392 }, { gpu_name: "RTX A4000", idle: 6, total: 24 },
       { gpu_name: "RTX 5090", idle: 3, total: 980 }, { gpu_name: "RTX 4090", idle: 0, total: 940 },
       { gpu_name: "RTX 4090D", idle: 0, total: 512 },
     ] },
   ],
   rules: [
-    { rule_id: 1, hit: true, idle_sum: 77, machines: null, matched: ["RTX 4090×50", "RTX 4090D×27"], error: null },
-    { rule_id: 2, hit: true, idle_sum: 2, machines: null, matched: ["RTX 5090×2"], error: null },
-    { rule_id: 3, hit: false, idle_sum: 0, machines: null, matched: [], error: null },
-    { rule_id: 4, hit: true, idle_sum: 2, machines: 1, matched: ["RTX 5090×2"], error: null },
+    { rule_id: 1, hit: true, idle_sum: 77, machines: null, matched: ["RTX 4090×50", "RTX 4090D×27"], error: null, market_url: ruleUrl(1) },
+    { rule_id: 2, hit: true, idle_sum: 2, machines: null, matched: ["RTX 5090×2"], error: null, market_url: ruleUrl(2) },
+    { rule_id: 3, hit: false, idle_sum: 0, machines: null, matched: [], error: null, market_url: ruleUrl(3) },
+    { rule_id: 4, hit: true, idle_sum: 2, machines: 1, matched: ["RTX 5090×2"], error: null, market_url: ruleUrl(4) },
   ],
   balance: { assets: 187.46, accumulate: 2872.54, voucher_balance: 0 }, balance_at: now() - 60,
 });

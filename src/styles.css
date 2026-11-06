@@ -244,3 +244,6 @@ textarea.field-input { height: auto; padding: 10px 14px; resize: vertical; }
   .content { padding: 32px 28px 48px; }
   .segmented button { padding: 0 11px; }
 }
+
+/* 库存展开后的「去租」条 */
+.rent-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 0 18px 16px 56px; font-size: 12.5px; }

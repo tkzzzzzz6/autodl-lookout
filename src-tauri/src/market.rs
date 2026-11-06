@@ -242,6 +242,14 @@ pub fn parse_wallet(d: &Value) -> crate::api::Balance {
     crate::api::Balance { assets: f("assets"), accumulate: f("accumulate"), voucher_balance: f("voucher_balance") }
 }
 
+/// 算力市场页面链接。页面只支持通过 `?region=<机房>` 预选区域（选中该机房所在的大区），卡型没法预选。
+pub fn market_url(signs: &[String]) -> String {
+    match signs.first() {
+        Some(sign) => format!("https://www.autodl.com/market/list?region={sign}"),
+        None => "https://www.autodl.com/market/list".into(),
+    }
+}
+
 pub fn group_regions(d: &Value) -> Vec<MarketRegion> {
     let mut map: BTreeMap<String, MarketRegion> = BTreeMap::new();
     for r in d.as_array().cloned().unwrap_or_default() {
@@ -343,6 +351,12 @@ fn b64url_decode(s: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn market_url_preselects_first_sign() {
+        assert_eq!(market_url(&["west-B".into(), "west-C".into()]), "https://www.autodl.com/market/list?region=west-B");
+        assert_eq!(market_url(&[]), "https://www.autodl.com/market/list");
+    }
 
     #[test]
     fn groups_regions_by_data_center() {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { call, fmtTime, type Rule, type RuleAction, type Snapshot, type Template } from "../api";
-import type { IconName } from "../icons";
+import { LINKS, call, fmtTime, openExternal, type Rule, type RuleAction, type Snapshot, type Template } from "../api";
+import { Icon, type IconName } from "../icons";
 import { Btn, ConfirmButton, FormRow, Group, Page, Row, Segmented, Sheet, Stepper, Switch, numOrNull, stagger, useAction, useRefData } from "../ui";
 
 const blank = (): Rule => ({
@@ -69,7 +69,14 @@ export default function RulesPage({ snap }: { snap: Snapshot | null }) {
                 <motion.div key={r.id} variants={stagger.item}>
                   <Row icon={ACTION_ICON[r.action]} grey={!r.enabled} label={<b style={{ fontWeight: 600 }}>{r.name}</b>} dim={!r.enabled}
                     sub={describe(r)} selected={edit?.id === r.id} onClick={() => setEdit({ ...r })}
-                    right={<span className="row" style={{ gap: 12, flexWrap: "nowrap" }}>{cap}<Switch checked={r.enabled} label={`启用 ${r.name}`} onChange={(v) => toggle(r, v)} /></span>} />
+                    right={<span className="row" style={{ gap: 12, flexWrap: "nowrap" }}>{cap}
+                      {r.enabled && s?.hit && (
+                        <button className="icon-btn" title="去算力市场租" aria-label={`去算力市场租 ${r.name}`}
+                          onClick={(e) => { e.stopPropagation(); openExternal(s.market_url || LINKS.market); }}>
+                          <Icon name="external" size={16} stroke={2} />
+                        </button>
+                      )}
+                      <Switch checked={r.enabled} label={`启用 ${r.name}`} onChange={(v) => toggle(r, v)} /></span>} />
                 </motion.div>
               );
             })}
