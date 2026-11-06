@@ -81,7 +81,7 @@ src/
   mock.ts      浏览器预览用的假数据
 ```
 
-测试：`cd src-tauri && cargo test`
+测试：`npm test`（前端检查与打包 + Rust 单元测试）；只看界面：`npm run demo`。
 
 数据库位置：Windows 在 `%APPDATA%\dev.local.autodl-lookout\autodl-lookout.sqlite3`，macOS 在 `~/Library/Application Support/dev.local.autodl-lookout/`。
 从旧名字 autodl-manager 升级时，首次启动会自动把旧数据库和凭证搬过来（旧数据库文件保留不动）。

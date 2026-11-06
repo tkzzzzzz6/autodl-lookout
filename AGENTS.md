@@ -2,6 +2,51 @@
 
 写给在这个仓库里工作的 AI 编码助手（Claude Code、Codex、Cursor 等）和新贡献者。动手前请完整读一遍。
 
+## 协作流程（Issue → PR）
+
+本仓库所有改动都经过 issue 和 PR：先在 issue 里写清楚要做什么，再在独立分支上实现，提交 PR 由维护者审阅、合并。Agent 不直接修改维护者本机的工作区，也不直接提交到 `main`。
+
+### 开始之前
+
+- 每项工作对应一个 issue。没有 issue 时，先按 `.github/ISSUE_TEMPLATE/` 的格式起草，写明背景、工作范围、验收标准和不做的内容，由维护者确认后再动手。
+- 从最新的 `origin/main` 拉分支，一个 issue 一个分支、一个 PR。分支命名：`<agent>/<issue 编号>-<简短英文描述>`，例如 `claude/3-webhook-notify`、`codex/4-per-machine-rule`。人工分支可用 `feat/...`、`fix/...`。
+- 动手前先读 issue 里列出的参考入口，以及本文件后面的「两种凭证」「已知坑」「安全和钱」。
+- 你只能看到已经推送到 GitHub 的内容。维护者本机未推送的改动、本机数据（`%APPDATA%\dev.local.autodl-lookout\` 下的 SQLite 数据库：规则、模板、库存历史、日志）和系统凭据管理器里的凭证都不在你的工作副本里；需要时在 issue 或 PR 里说明，不要猜测它们的内容，也不要索要真实凭证。
+
+### 实现
+
+- 只做 issue 范围内的事。顺手发现的其他问题记下来，在 PR 里列出或另开 issue，不要混进同一个 PR。
+- 保持现有代码风格：中文注释和界面文案，说明「为什么」而不是复述代码。
+- 不要改写与任务无关的文件，不要批量格式化，不要改动换行符（仓库内文本文件统一为 LF，见 `.gitattributes`）。
+- 改了用户可见的行为，同步更新 `README.md` 的功能表、用到的接口或注意事项。
+- 新功能和缺陷修复都要有测试：Rust 测试写在对应模块的 `#[cfg(test)] mod tests` 里；调用 AutoDL 的代码用 `api.rs` / `market.rs` 里的本地假 HTTP 服务器检查请求方法、路径、请求头和 body，返回值用真实接口的字段形状。前端目前靠 `tsc` 类型检查和演示模式下的手动验证。
+
+### 开 PR 之前
+
+在仓库根目录运行，全部通过才能提交 PR：
+
+```bash
+npm test          # = npm run build（tsc + vite build）+ cargo test
+```
+
+`cargo` 不能有新的 warning。这些检查与 CI（`.github/workflows/ci.yml`，Windows 和 Ubuntu 各跑一遍）一致。改了界面时，用离线演示模式（`npm run demo`）实际操作一遍，截图放进 PR。
+
+### 提交与 PR
+
+- 提交信息用中文，`feat:` / `fix:` / `docs:` / `refactor:` / `test:` / `chore:` 开头，标题一行说清楚做了什么，正文分条列出要点。由 Agent 创建的提交，在末尾附上该 Agent 要求的署名行。
+- PR 按 `.github/pull_request_template.md` 填写：
+  - 关联 issue：`Closes #编号`（全部完成）或 `Refs #编号`（部分完成）；
+  - 改了什么、为什么这样改；
+  - 验证：分成「已验证」（跑过哪些测试、在什么环境下手动操作过）和「需要在本地确认」（Windows 桌面版实际运行、打包安装、需要真实凭证和真实 AutoDL 数据的部分、会扣费的操作）；
+  - 边界：没有做什么、已知限制。
+- 给 PR 打 label，Release 说明按 label 分类（见 `.github/release.yml`）：新功能 `enhancement`，缺陷 `bug`，文档 `documentation`，破坏性变更 `breaking-change`。
+- 不要合并自己的 PR，合并由维护者决定。
+
+### 审阅之后
+
+- 审阅意见在同一个分支上继续提交修改并推送，不要另开 PR。逐条回复处理结果；不同意的意见说明理由。
+- `main` 有新提交、与 PR 冲突时，由提交 PR 的一方变基到最新的 `origin/main` 并解决冲突，再请维护者审阅。只在自己的 PR 分支上强制推送（`--force-with-lease`），绝不强制推送 `main`。
+
 ## 项目是什么
 
 **AutoDL Lookout（显卡管家）**：基于 Tauri 2 的桌面工具，盯着 [AutoDL](https://www.autodl.com) 各区域的空闲显卡，有卡时推送系统通知，可选在有卡时自动创建 / 开机「容器实例 Pro」。
@@ -14,16 +59,15 @@
 ## 常用命令
 
 ```bash
-npm install                 # 安装前端依赖
-npm run tauri dev           # 开发模式（会自动起 Vite 和编译 Rust）
-npm run build               # 前端类型检查 + 打包（tsc && vite build）
-npm run tauri build         # 打安装包，产物在 src-tauri/target/release/bundle/
-cd src-tauri && cargo test  # Rust 单元测试（不需要网络，也不需要真实凭证）
+npm install            # 安装前端依赖
+npm test               # 前端类型检查 + 打包（npm run build）+ Rust 单元测试（cargo test，离线，不需要凭证）
+npm run build          # 只做前端类型检查 + 打包到 dist/（Rust 编译时要用到 dist/）
+npm run demo           # 离线演示：浏览器打开 http://localhost:1420 ，用 src/mock.ts 的假数据
+npm run tauri dev      # 桌面开发模式（需要真实凭证才有数据）
+npm run tauri build    # 打安装包，产物在 src-tauri/target/release/bundle/
 ```
 
-只调界面时可以 `npm run dev`，在浏览器打开 http://localhost:1420 ：此时 `src/mock.ts` 提供假数据，顶栏会显示「预览数据」标记。
-
-**提交前必须通过**：`npm run build` 和 `cd src-tauri && cargo test`，且 `cargo` 不能有新的 warning。
+演示模式下顶栏会显示「预览数据」标记，不需要 AutoDL 账号。
 
 ## 目录
 
@@ -96,6 +140,5 @@ design/         设计稿 SVG（B2 风格）和应用图标源文件
 ## 改代码时
 
 - 新的 Tauri 命令：在 `commands.rs` 实现，在 `lib.rs` 的 `generate_handler!` 注册；前端通过 `api.ts` 的 `call()` 调用，参数名用 camelCase（Tauri 自动转 snake_case）。如果浏览器预览要用到，同时在 `mock.ts` 里加假数据。
-- 调用 AutoDL 的新代码要有测试：用 `api.rs` / `market.rs` 里的本地假 HTTP 服务器检查请求方法、路径、请求头和 body。
 - 数据库结构变化要兼容老数据（`CREATE TABLE IF NOT EXISTS`、新增列给默认值）。
 - 轮询间隔最少 30 秒，出错时指数退避到 10 分钟，不要为了“更实时”去掉。

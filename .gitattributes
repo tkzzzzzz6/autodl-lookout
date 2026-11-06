@@ -1,0 +1,8 @@
+# 仓库内文本文件统一为 LF；Windows 上检出也保持 LF，避免整文件换行符变化
+* text=auto eol=lf
+
+# 二进制文件不做换行符转换
+*.png binary
+*.ico binary
+*.icns binary
+*.woff2 binary
