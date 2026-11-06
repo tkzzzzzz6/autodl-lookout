@@ -196,6 +196,24 @@ impl MarketClient {
     }
 }
 
+/// 每台普通实例每天最多手动开机几次（无卡模式也算，失败也计数）
+pub const MANUAL_POWER_ON_DAILY_LIMIT: i64 = 5;
+
+/// 手动开机普通实例前的安全阀：余额必须查得到、不低于下限，当天次数没超过上限。
+/// balance：查余额的结果（元）；attempts_today：这台实例今天已经尝试开机的次数。
+pub fn power_on_guard(balance: Result<f64, String>, min_balance: f64, attempts_today: i64) -> Result<(), String> {
+    if attempts_today >= MANUAL_POWER_ON_DAILY_LIMIT {
+        return Err(format!(
+            "这台实例今天已经开机 {attempts_today} 次，达到每天 {MANUAL_POWER_ON_DAILY_LIMIT} 次的上限，请明天再试或到控制台操作"
+        ));
+    }
+    let b = balance.map_err(|e| format!("查不到余额，为了避免意外扣费暂不开机：{e}"))?;
+    if b < min_balance {
+        return Err(format!("当前余额 {b:.2} 元，低于「开机余额下限」{min_balance:.2} 元，暂不开机。可以先充值，或在「设置」里调低下限"));
+    }
+    Ok(())
+}
+
 fn str_of(v: &Value, k: &str) -> String {
     v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string()
 }
@@ -489,6 +507,20 @@ mod tests {
         assert!(i.has_password);
         let json = serde_json::to_string(&i).unwrap();
         assert!(!json.contains("fake-password"), "密码不能出现在列表里");
+    }
+
+    #[test]
+    fn power_on_guard_checks_balance_and_daily_limit() {
+        assert!(power_on_guard(Ok(50.0), 10.0, 0).is_ok());
+        assert!(power_on_guard(Ok(10.0), 10.0, MANUAL_POWER_ON_DAILY_LIMIT - 1).is_ok());
+        let e = power_on_guard(Ok(9.99), 10.0, 0).unwrap_err();
+        assert!(e.contains("9.99") && e.contains("10.00"), "{e}");
+        let e = power_on_guard(Err("网络超时".into()), 10.0, 0).unwrap_err();
+        assert!(e.contains("查不到余额") && e.contains("网络超时"), "{e}");
+        let e = power_on_guard(Ok(500.0), 10.0, MANUAL_POWER_ON_DAILY_LIMIT).unwrap_err();
+        assert!(e.contains("上限"), "{e}");
+        // 次数超限时不需要再看余额
+        assert!(power_on_guard(Err("x".into()), 10.0, MANUAL_POWER_ON_DAILY_LIMIT).unwrap_err().contains("上限"));
     }
 
     #[test]

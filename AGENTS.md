@@ -108,7 +108,7 @@ design/         设计稿 SVG（B2 风格）和应用图标源文件
 - `POST /api/v1/machine/region/gpu_type`，body `{"region_sign_list": [...]}`：各卡型空闲 / 总数，和算力市场顶部数字一致。
 - `POST /api/v1/user/machine/list`：按机器列出，带 `payg_price`（元 × 1000，每卡每小时）和 `highest_cuda_version`、每台的 `gpu_idle_num`，用于带单价 / CUDA / 单机卡数条件的规则。
 - `GET  /api/v1/wallet`：余额（元 × 1000）。
-- `POST /api/v1/instance`，body `{"page_index", "page_size"}`：我的普通容器实例；`POST /api/v1/instance/power_on` / `power_off`，body `{"instance_uuid"}`，无卡模式开机加 `"payload": "non_gpu"`。普通实例只做手动开关机，不接规则的自动动作；root 密码只在用户点复制时单独取，不放进列表、不写日志。
+- `POST /api/v1/instance`，body `{"page_index", "page_size"}`：我的普通容器实例；`POST /api/v1/instance/power_on` / `power_off`，body `{"instance_uuid"}`，无卡模式开机加 `"payload": "non_gpu"`。普通实例只做手动开关机，不接规则的自动动作；手动开机前过 `market::power_on_guard`（余额查得到且不低于「开机余额下限」、每台每天最多 5 次）；root 密码只在用户点复制时单独取，不放进列表、不写日志。
 
 这些接口不是官方开放的，随时可能变。改动相关代码时，返回格式的测试要用真实返回的字段形状（见 `market.rs` 里的测试）。
 
@@ -126,7 +126,7 @@ design/         设计稿 SVG（B2 风格）和应用图标源文件
 
 - **永远不要**把凭证写进日志、错误信息、提交、测试快照或截图。测试里用假字符串。
 - 网页登录凭证等同于用户的登录状态，权限比开发者 Token 大，只能存在 `secret.rs` 的钥匙串里。
-- 自动创建 / 开机会扣费。保留这些安全阀：每条规则每天次数上限（失败也计数）、执行前查余额并和「自动动作余额下限」比较、默认只提醒。新增任何会产生费用的动作都要有同等的把关，并写日志。
+- 自动创建 / 开机会扣费。保留这些安全阀：每条规则每天次数上限（失败也计数）、执行前查余额并和「开机余额下限」（设置项 `auto_min_balance_yuan`）比较、查不到余额就不执行、默认只提醒。新增任何会产生费用的动作，包括手动操作，都要有同等的后端把关并写日志，界面上的二次确认不能代替。
 - 释放实例等不可逆操作在界面上用 `ConfirmButton`（点两次）。
 
 ## 界面约定
@@ -142,4 +142,4 @@ design/         设计稿 SVG（B2 风格）和应用图标源文件
 
 - 新的 Tauri 命令：在 `commands.rs` 实现，在 `lib.rs` 的 `generate_handler!` 注册；前端通过 `api.ts` 的 `call()` 调用，参数名用 camelCase（Tauri 自动转 snake_case）。如果浏览器预览要用到，同时在 `mock.ts` 里加假数据。
 - 数据库结构变化要兼容老数据（`CREATE TABLE IF NOT EXISTS`、新增列给默认值）。
-- 轮询间隔最少 30 秒，出错时指数退避到 10 分钟，不要为了“更实时”去掉。
+- 轮询间隔最少 30 秒，出错时指数退避到 10 分钟，不要为了“更实时”去掉。前端页面自己的定时刷新也一样（见 `Instances.tsx` 的 `usePolling`）。

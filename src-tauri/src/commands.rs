@@ -213,13 +213,33 @@ pub async fn regular_instance_password(st: State<'_, AppState>, uuid: String) ->
     market(&st)?.instance_password(&uuid).await.map_err(s)
 }
 
-/// 手动开机会开始计费：界面上要点两次确认，这里只做手动操作，不接入规则的自动动作
+/// 手动开机会开始计费：界面上要点两次确认，这里再过一遍安全阀（`market::power_on_guard`）：
+/// 余额查得到且不低于「开机余额下限」、每台实例每天最多 5 次（失败也计数）。
+/// 只做手动操作，不接入规则的自动动作。
 #[tauri::command]
 pub async fn regular_power_on(st: State<'_, AppState>, uuid: String, non_gpu: bool) -> R<()> {
-    market(&st)?.power_on(&uuid, non_gpu).await.map_err(s)?;
+    let m = market(&st)?;
     let mode = if non_gpu { "（无卡模式）" } else { "" };
-    let _ = st.store.log(now(), "info", "manual", None, &format!("普通实例开机{mode} {uuid}"));
-    Ok(())
+    let key = format!("regular_power_on:{uuid}:{}", chrono::Local::now().format("%Y-%m-%d"));
+    let attempts: i64 = st.store.kv_get(&key).ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let balance = m.wallet().await.map(|b| b.assets).map_err(s);
+    let min = st.store.settings().auto_min_balance_yuan;
+    if let Err(e) = crate::market::power_on_guard(balance, min, attempts) {
+        let _ = st.store.log(now(), "warn", "skip", None, &format!("普通实例开机{mode}被拦下 {uuid}：{e}"));
+        return Err(e);
+    }
+    // 先记次数再发请求，失败也算一次，避免反复重试
+    let _ = st.store.kv_set(&key, &(attempts + 1).to_string());
+    match m.power_on(&uuid, non_gpu).await {
+        Ok(()) => {
+            let _ = st.store.log(now(), "info", "manual", None, &format!("普通实例开机{mode} {uuid}（今天第 {} 次）", attempts + 1));
+            Ok(())
+        }
+        Err(e) => {
+            let _ = st.store.log(now(), "warn", "manual", None, &format!("普通实例开机{mode}失败 {uuid}：{e}"));
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
