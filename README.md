@@ -85,3 +85,15 @@ src/
 
 数据库位置：Windows 在 `%APPDATA%\dev.local.autodl-lookout\autodl-lookout.sqlite3`，macOS 在 `~/Library/Application Support/dev.local.autodl-lookout/`。
 从旧名字 autodl-manager 升级时，首次启动会自动把旧数据库和凭证搬过来（旧数据库文件保留不动）。
+
+## 参与贡献
+
+欢迎提 Issue 和 PR，开发环境、提交规范和注意事项见 [CONTRIBUTING.md](./CONTRIBUTING.md)。使用 AI 编码助手的话，项目约定写在 [AGENTS.md](./AGENTS.md)。
+
+本项目与 AutoDL 官方无关。
+
+## 许可
+
+[MIT](./LICENSE) © 2026 tkzzzzzz6
+
+打包的标题字体是 Noto Serif SC 子集，使用 [SIL Open Font License 1.1](./src/assets/fonts/LICENSE-OFL.txt)。

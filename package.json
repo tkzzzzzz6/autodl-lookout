@@ -2,6 +2,12 @@
   "name": "autodl-lookout",
   "private": true,
   "version": "0.1.0",
+  "description": "盯着 AutoDL 空闲显卡、有卡就提醒的桌面工具",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tkzzzzzz6/autodl-lookout.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
