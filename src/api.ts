@@ -21,7 +21,7 @@ export interface RefData { regions: Opt[]; pro_regions: Opt[]; gpu_specs: Opt[];
 export interface StockItem { gpu_name: string; idle: number; total: number }
 export interface Balance { assets: number; accumulate: number; voucher_balance: number }
 export interface RegionStock { region: string; region_name: string; items: StockItem[]; error: string | null }
-export interface RuleState { rule_id: number; hit: boolean; idle_sum: number; matched: string[]; error: string | null }
+export interface RuleState { rule_id: number; hit: boolean; idle_sum: number; machines: number | null; matched: string[]; error: string | null }
 export interface Snapshot {
   has_token: boolean; has_web_token: boolean; web_token_exp: number | null; paused: boolean; running: boolean;
   last_run_at: number | null; next_run_at: number | null; last_error: string | null;
@@ -38,6 +38,8 @@ export interface Rule {
   min_idle: number; cuda_v_from: number | null; max_price_yuan: number | null;
   cooldown_minutes: number; action: RuleAction; template_id: number | null;
   instance_uuid: string | null; daily_limit: number; last_fired_at: number | null;
+  /** 单台机器至少空出几张卡（1 = 按区域总数） */
+  min_per_machine: number;
 }
 export interface Template {
   id: number; name: string; gpu_spec_uuid: string; gpu_amount: number; data_center_list: string[];

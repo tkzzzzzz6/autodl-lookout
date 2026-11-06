@@ -50,6 +50,13 @@ pub struct Rule {
     pub instance_uuid: Option<String>,
     pub daily_limit: i64,
     pub last_fired_at: Option<i64>,
+    /// 单台机器至少空出几张卡才算（1 = 按区域总数，和以前一样）
+    #[serde(default = "one")]
+    pub min_per_machine: i64,
+}
+
+fn one() -> i64 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,7 +121,7 @@ impl Store {
                 gpu_keyword TEXT NOT NULL, min_idle INTEGER NOT NULL, cuda_v_from INTEGER,
                 max_price_yuan REAL, cooldown_minutes INTEGER NOT NULL, action TEXT NOT NULL,
                 template_id INTEGER, instance_uuid TEXT, daily_limit INTEGER NOT NULL,
-                last_fired_at INTEGER
+                last_fired_at INTEGER, min_per_machine INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,6 +141,7 @@ impl Store {
             "#,
         )
         .map_err(e)?;
+        migrate(&conn)?;
         let s = Self { conn: Mutex::new(conn) };
         s.seed_defaults()?;
         Ok(s)
@@ -160,6 +168,7 @@ impl Store {
                     instance_uuid: None,
                     daily_limit: 1,
                     last_fired_at: None,
+                    min_per_machine: 1,
                 })?;
             }
         }
@@ -213,7 +222,7 @@ impl Store {
         let mut st = c
             .prepare(
                 "SELECT id,name,enabled,region_sign,gpu_keyword,min_idle,cuda_v_from,max_price_yuan,
-                 cooldown_minutes,action,template_id,instance_uuid,daily_limit,last_fired_at
+                 cooldown_minutes,action,template_id,instance_uuid,daily_limit,last_fired_at,min_per_machine
                  FROM rules ORDER BY id",
             )
             .map_err(e)?;
@@ -234,6 +243,7 @@ impl Store {
                     instance_uuid: r.get(11)?,
                     daily_limit: r.get(12)?,
                     last_fired_at: r.get(13)?,
+                    min_per_machine: r.get(14)?,
                 })
             })
             .map_err(e)?;
@@ -245,12 +255,12 @@ impl Store {
         if r.id > 0 {
             c.execute(
                 "UPDATE rules SET name=?1,enabled=?2,region_sign=?3,gpu_keyword=?4,min_idle=?5,cuda_v_from=?6,
-                 max_price_yuan=?7,cooldown_minutes=?8,action=?9,template_id=?10,instance_uuid=?11,daily_limit=?12
-                 WHERE id=?13",
+                 max_price_yuan=?7,cooldown_minutes=?8,action=?9,template_id=?10,instance_uuid=?11,daily_limit=?12,
+                 min_per_machine=?14 WHERE id=?13",
                 params![
                     r.name, r.enabled as i64, r.region_sign, r.gpu_keyword, r.min_idle, r.cuda_v_from,
                     r.max_price_yuan, r.cooldown_minutes, r.action, r.template_id, r.instance_uuid,
-                    r.daily_limit, r.id
+                    r.daily_limit, r.id, r.min_per_machine.max(1)
                 ],
             )
             .map_err(e)?;
@@ -258,12 +268,12 @@ impl Store {
         } else {
             c.execute(
                 "INSERT INTO rules(name,enabled,region_sign,gpu_keyword,min_idle,cuda_v_from,max_price_yuan,
-                 cooldown_minutes,action,template_id,instance_uuid,daily_limit)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                 cooldown_minutes,action,template_id,instance_uuid,daily_limit,min_per_machine)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
                 params![
                     r.name, r.enabled as i64, r.region_sign, r.gpu_keyword, r.min_idle, r.cuda_v_from,
                     r.max_price_yuan, r.cooldown_minutes, r.action, r.template_id, r.instance_uuid,
-                    r.daily_limit
+                    r.daily_limit, r.min_per_machine.max(1)
                 ],
             )
             .map_err(e)?;
@@ -433,6 +443,19 @@ impl Store {
     }
 }
 
+/// 给老数据库补上后来新增的列（新增列都有默认值，老规则行为不变）
+fn migrate(conn: &Connection) -> R<()> {
+    let has = |table: &str, col: &str| -> R<bool> {
+        let mut st = conn.prepare(&format!("PRAGMA table_info({table})")).map_err(e)?;
+        let cols: Vec<String> = st.query_map([], |r| r.get::<_, String>(1)).map_err(e)?.filter_map(Result::ok).collect();
+        Ok(cols.iter().any(|c| c == col))
+    };
+    if !has("rules", "min_per_machine")? {
+        conn.execute("ALTER TABLE rules ADD COLUMN min_per_machine INTEGER NOT NULL DEFAULT 1", []).map_err(e)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,12 +479,41 @@ mod tests {
         s.save_settings(&st).unwrap();
         assert_eq!(s.settings().poll_interval_secs, 30, "clamped to >= 30s");
 
-        s.insert_history(100, "westDC3", &[StockItem { gpu_name: "RTX 4090".into(), idle: 2, total: 9 }])
+        s.insert_history(100, "westDC3", &[StockItem { gpu_name: "RTX 4090".into(), idle: 2, total: 9, machines: None }])
             .unwrap();
         assert_eq!(s.history("westDC3", "RTX 4090", 0).unwrap().len(), 1);
 
         s.log(10, "info", "auto", Some(7), "x").unwrap();
         assert_eq!(s.auto_actions_since(7, 0).unwrap(), 1);
         assert_eq!(s.auto_actions_since(7, 11).unwrap(), 0);
+    }
+
+    #[test]
+    fn old_database_gets_min_per_machine_default_1() {
+        // 模拟升级前的库：rules 表没有 min_per_machine 列
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL, enabled INTEGER NOT NULL, region_sign TEXT NOT NULL,
+                gpu_keyword TEXT NOT NULL, min_idle INTEGER NOT NULL, cuda_v_from INTEGER,
+                max_price_yuan REAL, cooldown_minutes INTEGER NOT NULL, action TEXT NOT NULL,
+                template_id INTEGER, instance_uuid TEXT, daily_limit INTEGER NOT NULL,
+                last_fired_at INTEGER
+            );
+            INSERT INTO rules(name,enabled,region_sign,gpu_keyword,min_idle,cooldown_minutes,action,daily_limit)
+            VALUES('老规则',1,'westDC3','4090',1,15,'notify',1);
+            CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+            INSERT INTO kv VALUES('seeded','1');",
+        )
+        .unwrap();
+        let s = Store::init(conn).unwrap();
+        let rules = s.rules().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].min_per_machine, 1);
+        let mut r = rules[0].clone();
+        r.min_per_machine = 4;
+        s.save_rule(r).unwrap();
+        assert_eq!(s.rules().unwrap()[0].min_per_machine, 4);
     }
 }

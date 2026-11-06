@@ -47,11 +47,14 @@ pub struct Balance {
     pub voucher_balance: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct StockItem {
     pub gpu_name: String,
     pub idle: i64,
     pub total: i64,
+    /// 按机器统计时：满足条件的机器台数（区域汇总数据里没有）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machines: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -267,6 +270,7 @@ pub fn parse_stock(d: &Value) -> ApiResult<Vec<StockItem>> {
                     continue;
                 }
                 out.push(StockItem {
+                    machines: None,
                     gpu_name: name,
                     idle: v.get("idle_gpu_num").and_then(|x| x.as_i64()).unwrap_or(0),
                     total: v.get("total_gpu_num").and_then(|x| x.as_i64()).unwrap_or(0),
@@ -303,7 +307,7 @@ mod tests {
         ]);
         let s = parse_stock(&d).unwrap();
         assert_eq!(s.len(), 3);
-        assert_eq!(s[0], StockItem { gpu_name: "RTX 4090".into(), idle: 215, total: 2285 });
+        assert_eq!(s[0], StockItem { gpu_name: "RTX 4090".into(), idle: 215, total: 2285, machines: None });
     }
 
     /// 起一个最小的 HTTP 假服务器：按顺序回复 replies，返回收到的原始请求

@@ -7,7 +7,7 @@ import { Btn, ConfirmButton, FormRow, Group, Page, Row, Segmented, Sheet, Steppe
 const blank = (): Rule => ({
   id: 0, name: "", enabled: true, region_sign: "westDC3", gpu_keyword: "", min_idle: 1, cuda_v_from: null,
   max_price_yuan: null, cooldown_minutes: 15, action: "notify", template_id: null, instance_uuid: null,
-  daily_limit: 1, last_fired_at: null,
+  daily_limit: 1, last_fired_at: null, min_per_machine: 1,
 });
 
 const ACTION_ICON: Record<RuleAction, IconName> = { notify: "bell", create: "plus_sq", power_on: "power" };
@@ -29,7 +29,7 @@ export default function RulesPage({ snap }: { snap: Snapshot | null }) {
   const set = <K extends keyof Rule>(k: K, v: Rule[K]) => setEdit((e) => (e ? { ...e, [k]: v } : e));
 
   const describe = (r: Rule) => {
-    const bits = [`空闲 ≥ ${r.min_idle}`];
+    const bits = [r.min_per_machine > 1 ? `单机 ≥ ${r.min_per_machine} 卡` : `空闲 ≥ ${r.min_idle}`];
     if (r.max_price_yuan != null) bits.push(`≤ ¥${r.max_price_yuan}/时`);
     if (r.cuda_v_from != null) bits.push(`CUDA ≥ ${(r.cuda_v_from / 10).toFixed(1)}`);
     bits.push(r.action === "notify" ? `冷却 ${r.cooldown_minutes} 分钟` : r.action === "create" ? "有卡后自动创建实例" : "有卡后自动开机");
@@ -63,7 +63,7 @@ export default function RulesPage({ snap }: { snap: Snapshot | null }) {
               const s = state(r.id);
               const cap = !r.enabled ? <span className="capsule">已停用</span>
                 : s?.error ? <span className="capsule err" title={s.error}>查询失败</span>
-                : s?.hit ? <motion.span className="capsule on num" initial={{ scale: .8 }} animate={{ scale: 1 }}>有 {s.idle_sum} 张</motion.span>
+                : s?.hit ? <motion.span className="capsule on num" initial={{ scale: .8 }} animate={{ scale: 1 }}>{r.min_per_machine > 1 && s.machines != null ? `${s.machines} 台可开 ${r.min_per_machine} 卡` : `有 ${s.idle_sum} 张`}</motion.span>
                 : s ? <span className="capsule">没有</span> : <span className="capsule">等待</span>;
               return (
                 <motion.div key={r.id} variants={stagger.item}>
@@ -106,7 +106,15 @@ export default function RulesPage({ snap }: { snap: Snapshot | null }) {
               <FormRow icon="number" label="空闲至少">
                 <Stepper value={edit.min_idle} min={1} max={64} unit="张" onChange={(v) => set("min_idle", v)} />
               </FormRow>
+              <FormRow icon="server" label="单机至少">
+                <Stepper value={edit.min_per_machine} min={1} max={8} unit="卡" onChange={(v) => set("min_per_machine", v)} />
+              </FormRow>
             </Group>
+            <div className="group-foot">
+              {edit.min_per_machine > 1
+                ? `只统计单台机器同时空出 ${edit.min_per_machine} 张卡的情况，适合多卡训练；「空闲至少」按这些机器的空闲卡数加总。`
+                : "「单机至少」为 1 时按整个区域的空闲总数判断；跑多卡训练时调大它。"}
+            </div>
             <div className="group-foot">关键字不区分大小写，「4090」会同时匹配 RTX 4090 和 RTX 4090D。</div>
 
             <div className="group-label">筛选</div>
