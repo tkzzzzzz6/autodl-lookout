@@ -8,7 +8,7 @@ use chrono::{Local, TimeZone};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Notify;
@@ -101,6 +101,11 @@ pub fn plan_queries(regions: &[String], rules: &[Rule]) -> Vec<StockQuery> {
         .collect()
 }
 
+/// 后台提醒读实例列表失败时的退避：第一次 120 秒，之后翻倍，最长 600 秒。返回 (这次等多久, 是不是第一次失败)
+pub fn list_backoff(prev: i64) -> (i64, bool) {
+    if prev <= 0 { (120, true) } else { ((prev * 2).min(600), false) }
+}
+
 pub fn next_backoff(current_secs: u64, base_secs: u64, ok: bool) -> u64 {
     if ok {
         base_secs
@@ -164,7 +169,19 @@ pub struct Monitor {
     pub prices: crate::price::PriceCache,
     /// SSH 连接池（服务器页的测试连接、推送公钥、状态采集共用）
     pub ssh: crate::ssh::SshPool,
+    /// 服务器提醒的状态：id → (提醒状态, 下次可以采集的时间, 当前退避秒数)
+    watch_state: Mutex<HashMap<String, (crate::serverstat::WatchState, i64, i64)>>,
+    /// 普通实例列表的短缓存：(查询时间, 列表)。用 tokio 锁，查询期间别的调用排队等结果（合并请求）
+    inst_cache: tokio::sync::Mutex<Option<(i64, Vec<crate::market::RegularInstance>)>>,
+    /// AutoDL 实例 root 密码，只放内存：uuid → (取到的时间, 密码)
+    pw_cache: Mutex<HashMap<String, (i64, String)>>,
+    /// 后台提醒读实例列表失败时的退避：(下次可以查的时间, 当前退避秒数)
+    watch_list_backoff: Mutex<(i64, i64)>,
 }
+
+/// 实例列表缓存时间：服务器页、状态面板、后台提醒在这段时间内共用一次查询
+pub const INSTANCES_FRESH_SECS: i64 = 30;
+const PASSWORD_FRESH_SECS: i64 = 600;
 
 pub type QKey = (String, Option<i64>, Option<i64>, i64, String);
 
@@ -183,6 +200,10 @@ impl Monitor {
             last_prune: RwLock::new(0),
             prices: Default::default(),
             ssh,
+            watch_state: Mutex::new(HashMap::new()),
+            inst_cache: tokio::sync::Mutex::new(None),
+            pw_cache: Mutex::new(HashMap::new()),
+            watch_list_backoff: Mutex::new((0, 0)),
         })
     }
 
@@ -255,6 +276,123 @@ impl Monitor {
                 }
             }
         });
+    }
+
+    /// 服务器提醒：每 60 秒采集开了提醒的服务器（空闲 / 训练结束 / 磁盘），单台出错时指数退避到 10 分钟
+    pub fn spawn_server_watch(self: &Arc<Self>, app: AppHandle) {
+        let me = self.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                me.server_watch_round(&app).await;
+            }
+        });
+    }
+
+    /// 普通实例列表：max_age 秒内的结果直接复用；同一时刻只有一个调用真正去查，其他调用等它的结果
+    pub async fn instances_cached(&self, max_age: i64) -> Result<Vec<crate::market::RegularInstance>, String> {
+        let m = self.market().ok_or("没有填写网页登录凭证，AutoDL 实例不会出现在这里")?;
+        let mut cache = self.inst_cache.lock().await;
+        if let Some((at, list)) = cache.as_ref() {
+            if now() - at < max_age {
+                return Ok(list.clone());
+            }
+        }
+        let list = m.instances().await.map_err(|e| format!("读取 AutoDL 实例失败：{e}"))?;
+        *cache = Some((now(), list.clone()));
+        Ok(list)
+    }
+
+    /// AutoDL 实例的 root 密码：10 分钟内用内存里的，不写数据库、不写日志
+    pub async fn instance_password_cached(&self, uuid: &str) -> Result<String, String> {
+        if let Some((at, pw)) = self.pw_cache.lock().unwrap().get(uuid) {
+            if now() - at < PASSWORD_FRESH_SECS {
+                return Ok(pw.clone());
+            }
+        }
+        let m = self.market().ok_or("还没有填写网页登录凭证，取不到 AutoDL 实例的密码")?;
+        let pw = m.instance_password(uuid).await.map_err(|e| e.to_string())?;
+        self.pw_cache.lock().unwrap().insert(uuid.to_string(), (now(), pw.clone()));
+        Ok(pw)
+    }
+
+    pub fn reset_watch_state(&self, id: &str) {
+        self.watch_state.lock().unwrap().remove(id);
+    }
+
+    async fn server_watch_round(&self, app: &AppHandle) {
+        use crate::serverstat::{command, evaluate, parse, Watch};
+        let watches: Vec<Watch> = self.store.kv_prefix("watch:").unwrap_or_default().into_iter()
+            .filter_map(|(_, v)| serde_json::from_str::<Watch>(&v).ok()).filter(|w| w.any()).collect();
+        if watches.is_empty() {
+            return;
+        }
+        // AutoDL 实例列表读失败时不能当成「没有实例」：那样每分钟都会重查一遍失败的接口。
+        // 失败就跳过这一轮的 AutoDL 实例，从 2 分钟起指数退避到 10 分钟；自己的服务器照常采集
+        let ts0 = now();
+        let mut skip_autodl = false;
+        let insts = if watches.iter().any(|w| w.id.starts_with("autodl:")) {
+            let (next_try, delay) = *self.watch_list_backoff.lock().unwrap();
+            if ts0 < next_try {
+                skip_autodl = true;
+                vec![]
+            } else {
+                match self.instances_cached(INSTANCES_FRESH_SECS).await {
+                    Ok(v) => {
+                        *self.watch_list_backoff.lock().unwrap() = (0, 0);
+                        v
+                    }
+                    Err(e) => {
+                        let (d, first) = crate::monitor::list_backoff(delay);
+                        if first {
+                            self.log("warn", "server", None, &format!("服务器提醒读不到 AutoDL 实例列表，{d} 秒后重试：{e}"));
+                        }
+                        *self.watch_list_backoff.lock().unwrap() = (ts0 + d, d);
+                        skip_autodl = true;
+                        vec![]
+                    }
+                }
+            }
+        } else {
+            vec![]
+        };
+        let saved = self.store.servers().unwrap_or_default();
+        let views = crate::servers::views(&self.store, &insts, &saved, &[]);
+        let ts = now();
+        for w in watches {
+            if skip_autodl && w.id.starts_with("autodl:") {
+                continue;
+            }
+            let Some(v) = views.iter().find(|v| v.id == w.id) else { continue };
+            let (prev, next_try, delay) = self.watch_state.lock().unwrap().get(&w.id).cloned().unwrap_or_default();
+            if ts < next_try {
+                continue;
+            }
+            let autodl_running = v.kind == "autodl" && v.status.as_deref() == Some("running");
+            if v.kind == "autodl" && !autodl_running {
+                // 关机的实例不采集，也不保留空闲计时
+                self.watch_state.lock().unwrap().insert(w.id.clone(), Default::default());
+                continue;
+            }
+            match crate::servers::exec(self, v, &command(Some(&w))).await {
+                Ok(out) => {
+                    let st = parse(&out.stdout, ts, Some(&w));
+                    let (next, alerts) = evaluate(&prev, &st, &w, &v.name, autodl_running, ts);
+                    for a in alerts {
+                        self.log("warn", "server", None, &format!("{}：{}", a.title, a.body));
+                        crate::notify::send(app, &a.title, &a.body);
+                    }
+                    self.watch_state.lock().unwrap().insert(w.id.clone(), (next, 0, 0));
+                }
+                Err(e) => {
+                    let d = if delay == 0 { 120 } else { (delay * 2).min(600) };
+                    if delay == 0 {
+                        self.log("warn", "server", None, &format!("采集 {} 的状态失败，{} 秒后重试：{e}", v.name, d));
+                    }
+                    self.watch_state.lock().unwrap().insert(w.id.clone(), (prev, ts + d, d));
+                }
+            }
+        }
     }
 
     /// data_center（westDC3 …）→ 机房列表，区域表每小时刷新一次
@@ -729,6 +867,18 @@ mod tests {
         e.min_per_machine = 2;
         assert_eq!(rule_key(&d), rule_key(&e));
         assert_ne!(rule_key(&b), region_key("westDC3"));
+    }
+
+    #[test]
+    fn instance_list_backoff_grows_to_ten_minutes() {
+        let mut d = 0;
+        let mut seen = vec![];
+        for _ in 0..5 {
+            let (n, first) = list_backoff(d);
+            seen.push((n, first));
+            d = n;
+        }
+        assert_eq!(seen, vec![(120, true), (240, false), (480, false), (600, false), (600, false)]);
     }
 
     #[test]

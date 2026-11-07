@@ -37,6 +37,15 @@ export interface ServerRecord {
 export interface HostEntry { alias: string; host: string; port: number; user: string; identity_file: string | null }
 export interface Probe { ms: number; system: string; via_key: boolean }
 export const HOSTKEY_CHANGED = "HOSTKEY_CHANGED:";
+export interface Gpu { index: number; uuid: string; name: string; util: number; mem_used_mb: number; mem_total_mb: number; temp: number | null; power_w: number | null }
+export interface GpuProc { gpu: number; pid: number; mem_mb: number; user: string | null; elapsed_secs: number | null; cmd: string | null }
+export interface ServerStatus {
+  nvidia: boolean; gpus: Gpu[]; procs: GpuProc[]; load1: number | null; cores: number | null;
+  mem_total: number | null; mem_avail: number | null; disks: { mount: string; total: number; used: number }[];
+  job_alive: boolean | null; log_mtime: number | null; remote_now: number | null; fetched_at: number;
+}
+/** 服务器提醒设置（默认全关） */
+export interface Watch { id: string; idle: boolean; idle_minutes: number; disk: boolean; job_pid: number | null; job_log: string | null; job_quiet_minutes: number }
 
 /** 点开卡型时的实时价格（gpu_prices），单价都是每卡每小时、元 */
 export interface PriceTier { price_yuan: number; idle: number; machines: number; max_per_machine: number; max_cuda: number | null }
