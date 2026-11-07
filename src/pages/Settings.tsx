@@ -133,6 +133,13 @@ export default function SettingsPage({ hasToken, hasWebToken, webTokenExp }: { h
             </Group>
             <div className="group-foot">余额低于「开机余额下限」时，规则的自动创建 / 开机和手动开机普通实例都会被拦下。「运行超过多久」设为 0 表示不提醒。</div>
 
+            <div className="group-label">服务器</div>
+            <Group>
+              <FormRow icon="server" label="详情实时刷新"><Switch checked={s.server_live ?? true} label="详情实时刷新" onChange={(v) => set("server_live", v)} /></FormRow>
+              <FormRow icon="gpu_s" label="列表显示服务器状态"><Switch checked={s.server_overview ?? true} label="列表显示服务器状态" onChange={(v) => set("server_overview", v)} /></FormRow>
+            </Group>
+            <div className="group-foot">实时刷新：打开服务器详情时每 2 秒更新一次并画出最近 5 分钟的曲线，关掉面板或最小化窗口就停；关掉这项回到 30 秒刷新。列表状态：「服务器」页开着时每 10 秒采集一次每台的 GPU 利用率和显存；关掉就不连服务器。</div>
+
             {inTauri && (
               <>
                 <div className="group-label">系统</div>

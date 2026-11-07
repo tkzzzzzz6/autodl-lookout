@@ -1,7 +1,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { mockInvoke } from "./mock";
+import { mockInvoke, mockListenLive } from "./mock";
 
 export const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -14,6 +14,19 @@ export function onSnapshot(cb: (s: Snapshot) => void): () => void {
   let un: (() => void) | undefined;
   tauriListen<Snapshot>("snapshot", (e) => cb(e.payload)).then((u) => (un = u));
   return () => un?.();
+}
+
+/** 服务器实时状态（start_live 之后每 2 秒一帧）；返回取消监听的函数，等监听真正挂上后才 resolve */
+export function listenServerLive(cb: (e: LiveEvent) => void): Promise<() => void> {
+  if (!inTauri) return Promise.resolve(mockListenLive(cb));
+  return tauriListen<LiveEvent>("server-live", (e) => cb(e.payload));
+}
+
+/** 只改一项设置（页面上的快捷开关用） */
+export async function setSetting<K extends keyof Settings>(k: K, v: Settings[K]): Promise<Settings> {
+  const s = { ...(await call<Settings>("get_settings")), [k]: v };
+  await call("save_settings", { settings: s });
+  return s;
 }
 
 export interface Opt { value: string; label: string }
@@ -44,6 +57,9 @@ export interface ServerStatus {
   mem_total: number | null; mem_avail: number | null; disks: { mount: string; total: number; used: number }[];
   job_alive: boolean | null; log_mtime: number | null; remote_now: number | null; fetched_at: number;
 }
+export interface LiveEvent { id: string; status: ServerStatus | null; ended: boolean; error: string | null }
+/** 列表概览：每台 GPU 的平均利用率和显存合计 */
+export interface Overview { gpus: number; util_avg: number | null; mem_used_mb: number; mem_total_mb: number; no_gpu: boolean; error: string | null }
 /** 服务器提醒设置（默认全关） */
 export interface Watch { id: string; idle: boolean; idle_minutes: number; disk: boolean; job_pid: number | null; job_log: string | null; job_quiet_minutes: number }
 
@@ -75,6 +91,10 @@ export interface Settings {
   long_running_hours: number; auto_min_balance_yuan: number; history_keep_days: number;
   /** 关注的卡型关键字，库存页顶部显示合计 */
   watch_models: string[];
+  /** 服务器详情实时刷新（2 秒一帧）；关掉回到 30 秒刷新 */
+  server_live: boolean;
+  /** 服务器列表显示 GPU 利用率和显存（10 秒一次）；关掉就不采集 */
+  server_overview: boolean;
 }
 export type RuleAction = "notify" | "create" | "power_on";
 export interface Rule {

@@ -1,5 +1,5 @@
 // 浏览器预览用的假数据（`npm run dev` 直接在浏览器里打开时生效；在 Tauri 里不会用到）
-import type { RegularInstance, Rule, ServerRecord, Watch, Settings, Snapshot, Template } from "./api";
+import type { LiveEvent, RegularInstance, Rule, ServerRecord, Watch, Settings, Snapshot, Template } from "./api";
 
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -15,6 +15,7 @@ const regionsRef = [
 let settings: Settings = {
   poll_interval_secs: 60, regions: ["beijingDC3", "neimengDC2", "foshanDC1", "beijingDC2"], low_balance_yuan: 20,
   long_running_hours: 8, auto_min_balance_yuan: 10, history_keep_days: 14, watch_models: ["A100", "V100", "A800"],
+  server_live: true, server_overview: true,
 };
 
 // 机房代码来自真实的 region/list：西北B区第一个机房 west-B，北京B区 bj-B1
@@ -84,6 +85,30 @@ const snapshot = (): Snapshot => ({
 
 let sshSynced = false;
 const watches: Record<string, Watch> = {};
+// 演示用的实时采集：start_live 之后每 2 秒推一帧
+const liveListeners = new Set<(e: LiveEvent) => void>();
+const liveTimers: Record<string, number> = {};
+const liveSeeded = new Set<string>();
+export function mockListenLive(cb: (e: LiveEvent) => void) { liveListeners.add(cb); return () => { liveListeners.delete(cb); }; }
+function fakeStatus(id: string, at = now()) {
+  const lab = id === "srv:1";
+  const util = lab ? [97, 88, 0, 0, 100, 63, 0, 2] : id.startsWith("autodl:") ? [1, 0] : [];
+  const t = at;
+  const wob = (u: number, i: number) => (u > 3 ? Math.max(0, Math.min(100, Math.round(u - 8 + 8 * Math.sin(t / 7 + i) + Math.random() * 6))) : u);
+  const gpus = util.map((u0, i) => wob(u0, i)).map((u, i) => ({ index: i, uuid: `GPU-${i}`, name: lab ? "NVIDIA A100-SXM4-80GB" : "NVIDIA GeForce RTX 4090",
+    util: u, mem_used_mb: u > 3 ? 61234 + i * 900 : 4, mem_total_mb: lab ? 81920 : 24564, temp: 30 + u / 3, power_w: 60 + u * 3 }));
+  const users = ["zhangsan", "lisi", "tk"];
+  return {
+    nvidia: gpus.length > 0, gpus,
+    procs: gpus.filter((g) => g.util > 3).map((g, i) => ({ gpu: g.index, pid: 12000 + g.index, mem_mb: g.mem_used_mb - 500, user: lab ? users[i % 3] : null,
+      elapsed_secs: lab ? 3600 * (i + 2) : null, cmd: lab ? `python train.py --cfg configs/exp${i}.yaml` : null })),
+    load1: lab ? 23.5 + 4 * Math.sin(t / 11) : 0.4 + 0.2 * Math.sin(t / 5), cores: lab ? 128 : 16, mem_total: lab ? 1081234567890 : 64e9, mem_avail: lab ? 512345678901 : 51e9,
+    disks: lab ? [{ mount: "/", total: 1e12, used: 6.1e11 }, { mount: "/home", total: 8e12, used: 7.4e12 }]
+      : [{ mount: "/", total: 3e10, used: 1.2e10 }, { mount: "/root/autodl-tmp", total: 5e10, used: 4.6e10 }],
+    job_alive: watches[id]?.job_pid ? true : null, log_mtime: null, remote_now: null, fetched_at: at,
+  };
+}
+
 let autoSync = false;
 let ownKey: string | null = null;
 let myServers: ServerRecord[] = [
@@ -208,21 +233,29 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     ensure_ssh_key: () => { ownKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDemoDemoDemoDemoDemoDemoDemoDemo autodl-lookout"; return ownKey; },
     push_ssh_key: () => {},
     trust_host_key: () => {},
-    server_status: () => {
-      const lab = a.id === "srv:1";
-      const util = lab ? [97, 88, 0, 0, 100, 63, 0, 2] : (a.id as string).startsWith("autodl:") ? [1, 0] : [];
-      const gpus = util.map((u, i) => ({ index: i, uuid: `GPU-${i}`, name: lab ? "NVIDIA A100-SXM4-80GB" : "NVIDIA GeForce RTX 4090",
-        util: u, mem_used_mb: u > 3 ? 61234 + i * 900 : 4, mem_total_mb: lab ? 81920 : 24564, temp: 30 + u / 3, power_w: 60 + u * 3 }));
-      const users = ["zhangsan", "lisi", "tk"];
-      return {
-        nvidia: gpus.length > 0, gpus,
-        procs: gpus.filter((g) => g.util > 3).map((g, i) => ({ gpu: g.index, pid: 12000 + g.index, mem_mb: g.mem_used_mb - 500, user: lab ? users[i % 3] : null,
-          elapsed_secs: lab ? 3600 * (i + 2) : null, cmd: lab ? `python train.py --cfg configs/exp${i}.yaml` : null })),
-        load1: lab ? 23.5 : 0.4, cores: lab ? 128 : 16, mem_total: lab ? 1081234567890 : 64e9, mem_avail: lab ? 512345678901 : 51e9,
-        disks: lab ? [{ mount: "/", total: 1e12, used: 6.1e11 }, { mount: "/home", total: 8e12, used: 7.4e12 }]
-          : [{ mount: "/", total: 3e10, used: 1.2e10 }, { mount: "/root/autodl-tmp", total: 5e10, used: 4.6e10 }],
-        job_alive: watches[a.id as string]?.job_pid ? true : null, log_mtime: null, remote_now: null, fetched_at: now() - 3,
-      };
+    server_status: () => fakeStatus(a.id as string),
+    start_live: () => {
+      const id = a.id as string;
+      if (!settings.server_live) throw "设置里关了「详情实时刷新」";
+      if (id === "srv:2") throw "HOSTKEY_CHANGED:SHA256:fake|主机密钥变了";
+      window.clearInterval(liveTimers[id]);
+      // 演示：第一次打开时补上前 3 分钟，曲线不是空的
+      if (!liveSeeded.has(id)) { liveSeeded.add(id); for (let k = 90; k > 0; k--) liveListeners.forEach((cb) => cb({ id, status: fakeStatus(id, now() - k * 2), ended: false, error: null })); }
+      const emit = () => liveListeners.forEach((cb) => cb({ id, status: fakeStatus(id), ended: false, error: null }));
+      emit();
+      liveTimers[id] = window.setInterval(emit, 2000);
+    },
+    stop_live: () => { window.clearInterval(liveTimers[a.id as string]); delete liveTimers[a.id as string]; },
+    servers_overview: () => {
+      if (!settings.server_overview) return {};
+      const out: Record<string, unknown> = {};
+      for (const id of ["srv:1", "srv:2", ...regular.filter((i) => i.status === "running").map((i) => `autodl:${i.uuid}`)]) {
+        if (id === "srv:2") { out[id] = { gpus: 0, util_avg: null, mem_used_mb: 0, mem_total_mb: 0, no_gpu: false, error: "主机密钥变了，点开处理" }; continue; }
+        const s = fakeStatus(id);
+        out[id] = { gpus: s.gpus.length, util_avg: s.gpus.length ? s.gpus.reduce((x, g) => x + g.util, 0) / s.gpus.length : null,
+          mem_used_mb: s.gpus.reduce((x, g) => x + g.mem_used_mb, 0), mem_total_mb: s.gpus.reduce((x, g) => x + g.mem_total_mb, 0), no_gpu: s.gpus.length === 0, error: null };
+      }
+      return out;
     },
     get_server_watch: () => watches[a.id as string] ?? { id: a.id, idle: false, idle_minutes: 30, disk: false, job_pid: null, job_log: null, job_quiet_minutes: 15 },
     save_server_watch: () => { const w = a.watch as Watch; watches[w.id] = w; },

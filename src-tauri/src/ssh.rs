@@ -204,12 +204,63 @@ impl SshPool {
         }
     }
 
+    /// 执行一条长时间运行的命令，把输出按块交给 on_data，直到命令结束或 stop 变成 true。
+    /// stop 时关闭通道：远程的 sh 循环写 stdout 失败（SIGPIPE）后会自己退出，不会残留在服务器上。
+    /// 返回 Ok(true) 表示是被 stop 停掉的，Ok(false) 表示远程命令自己结束了。
+    pub async fn stream<F: FnMut(&[u8])>(&self, t: &Target, cmd: &str, mut on_data: F, mut stop: tokio::sync::watch::Receiver<bool>)
+        -> Result<bool, String> {
+        let h = self.handle(t, false).await?;
+        let mut ch = match h.channel_open_session().await {
+            Ok(c) => c,
+            Err(_) => self.handle(t, true).await?.channel_open_session().await.map_err(|e| format!("打开会话失败：{e}"))?,
+        };
+        ch.exec(true, cmd).await.map_err(|e| e.to_string())?;
+        loop {
+            tokio::select! {
+                changed = stop.changed() => {
+                    if changed.is_err() || *stop.borrow() {
+                        let _ = ch.close().await;
+                        return Ok(true);
+                    }
+                }
+                msg = ch.wait() => match msg {
+                    Some(ChannelMsg::Data { ref data }) => on_data(data),
+                    Some(_) => {}
+                    None => return Ok(false),
+                },
+            }
+        }
+    }
+
     /// 测试连接：返回往返耗时（毫秒）和远程系统一句话描述
     pub async fn probe(&self, t: &Target) -> Result<(u128, String), String> {
         self.forget(t).await;
         let t0 = Instant::now();
         let out = self.exec(t, "uname -srm; (. /etc/os-release 2>/dev/null && echo \"$PRETTY_NAME\")").await?;
         Ok((t0.elapsed().as_millis(), out.stdout.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" · ")))
+    }
+}
+
+/// 把流式输出按分隔行（如 `@@frame`）切成一帧一帧；不完整的尾巴留到下次
+#[derive(Default)]
+pub struct FrameSplitter {
+    buf: String,
+}
+
+impl FrameSplitter {
+    pub fn push(&mut self, data: &[u8], sep: &str) -> Vec<String> {
+        self.buf.push_str(&String::from_utf8_lossy(data));
+        let mut out = vec![];
+        let marker = format!("{sep}\n");
+        while let Some(i) = self.buf.find(&marker) {
+            out.push(self.buf[..i].to_string());
+            self.buf.drain(..i + marker.len());
+        }
+        // 防止对面一直不输出分隔行把内存撑大
+        if self.buf.len() > 1 << 20 {
+            self.buf.clear();
+        }
+        out
     }
 }
 
@@ -320,6 +371,12 @@ mod tests {
         }
         async fn exec_request(&mut self, ch: ChannelId, data: &[u8], s: &mut Session) -> Result<(), Self::Error> {
             let cmd = String::from_utf8_lossy(data).to_string();
+            if cmd.starts_with("forever") {
+                // 模拟常驻的采集循环：输出两帧后一直不结束
+                s.data(ch, CryptoVec::from("a\n@@frame\nb\n@@fr"))?;
+                s.data(ch, CryptoVec::from("ame\n"))?;
+                return Ok(());
+            }
             s.data(ch, CryptoVec::from(format!("ran: {cmd}\n")))?;
             s.extended_data(ch, 1, CryptoVec::from("warn\n"))?;
             s.exit_status_request(ch, 0)?;
@@ -377,6 +434,42 @@ mod tests {
         pool.forget(&t).await;
         let e = pool.exec(&t, "x").await.unwrap_err();
         assert!(e.starts_with(HOSTKEY_CHANGED), "{e}");
+    }
+
+    #[test]
+    fn splits_frames_across_chunks() {
+        let mut f = FrameSplitter::default();
+        assert!(f.push(b"gpu 1\n@@fr", "@@frame").is_empty());
+        assert_eq!(f.push(b"ame\ngpu 2\n@@frame\ngpu 3", "@@frame"), vec!["gpu 1\n", "gpu 2\n"]);
+        assert_eq!(f.push(b"\n@@frame\n", "@@frame"), vec!["gpu 3\n"]);
+    }
+
+    #[tokio::test]
+    async fn stream_delivers_frames_and_stops() {
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        let pool = Arc::new(SshPool::new(store));
+        let port = start(rand_key(), None).await;
+        let t = Target { host: "127.0.0.1".into(), port, user: "tk".into(), keys: vec![], password: Some("fake-pw".into()) };
+        // 命令自己结束
+        let mut got = String::new();
+        let (_tx0, rx0) = tokio::sync::watch::channel(false);
+        assert_eq!(pool.stream(&t, "echo once", |d| got.push_str(&String::from_utf8_lossy(d)), rx0).await, Ok(false));
+        assert_eq!(got, "ran: echo once\n");
+        // 常驻命令：收到两帧后手动停掉
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let (p2, t2, f2) = (pool.clone(), t.clone(), frames.clone());
+        let task = tokio::spawn(async move {
+            let mut sp = FrameSplitter::default();
+            p2.stream(&t2, "forever", |d| f2.lock().unwrap().extend(sp.push(d, "@@frame")), rx).await
+        });
+        for _ in 0..50 {
+            if frames.lock().unwrap().len() >= 2 { break; }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(*frames.lock().unwrap(), vec!["a\n".to_string(), "b\n".to_string()]);
+        tx.send(true).unwrap();
+        assert_eq!(tokio::time::timeout(Duration::from_secs(2), task).await.unwrap().unwrap(), Ok(true));
     }
 
     #[tokio::test]

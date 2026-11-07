@@ -114,6 +114,57 @@ pub fn script(w: Option<&Watch>) -> String {
     s
 }
 
+/// 实时刷新用的常驻命令：每 2 秒跑一次采集脚本，帧之间用 `@@frame` 分隔。
+/// 最多跑 30 分钟就自己退出（界面还开着会再起一个），防止 SSH 断开时残留在服务器上；
+/// 正常关闭时软件关掉通道，循环写 stdout 失败（SIGPIPE）也会立刻退出。
+pub const LIVE_SEP: &str = "@@frame";
+pub const LIVE_INTERVAL_SECS: u64 = 2;
+pub const LIVE_MAX_SECS: u64 = 1800;
+
+pub fn live_command(w: Option<&Watch>) -> String {
+    let body = format!(
+        "end=$(( $(date +%s) + {LIVE_MAX_SECS} )); while [ \"$(date +%s)\" -lt \"$end\" ]; do\n{}echo {LIVE_SEP}\nsleep {LIVE_INTERVAL_SECS}\ndone\n",
+        script(w)
+    );
+    format!("sh -c {}", shell_quote(&body))
+}
+
+/// 列表概览：只要每张 GPU 的利用率和显存，一次 nvidia-smi 就够
+pub fn overview_command() -> &'static str {
+    "nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null; echo @@done"
+}
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct Overview {
+    pub gpus: i64,
+    /// 所有 GPU 利用率的平均值 %
+    pub util_avg: Option<f64>,
+    pub mem_used_mb: f64,
+    pub mem_total_mb: f64,
+    /// 远程没有 nvidia-smi
+    pub no_gpu: bool,
+    pub error: Option<String>,
+}
+
+pub fn parse_overview(out: &str) -> Overview {
+    let rows: Vec<Vec<f64>> = out.lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with("@@"))
+        .filter_map(|l| {
+            let f: Vec<f64> = l.split(',').filter_map(num).collect();
+            (f.len() >= 3).then_some(f)
+        })
+        .collect();
+    let n = rows.len() as i64;
+    Overview {
+        gpus: n,
+        util_avg: (n > 0).then(|| rows.iter().map(|r| r[0]).sum::<f64>() / n as f64),
+        mem_used_mb: rows.iter().map(|r| r[1]).sum(),
+        mem_total_mb: rows.iter().map(|r| r[2]).sum(),
+        no_gpu: n == 0,
+        error: None,
+    }
+}
+
 /// 实际执行的命令：用 sh 跑采集脚本，不受用户登录 shell（zsh、fish 等）语法影响
 pub fn command(w: Option<&Watch>) -> String {
     format!("sh -c {}", shell_quote(&script(w)))
@@ -360,6 +411,24 @@ GPU-aaa, 23456, 200
         assert_eq!((st.mem_total, st.mem_avail), (Some(1081234567890), Some(812345678901)));
         assert_eq!(st.disks.len(), 2, "同一挂载点去重");
         assert_eq!((st.job_alive, st.log_mtime, st.remote_now), (Some(true), Some(1793548800), Some(1793549700)));
+    }
+
+    #[test]
+    fn live_command_loops_with_frames_and_deadline() {
+        let c = live_command(None);
+        assert!(c.starts_with("sh -c 'end=$(( $(date +%s) + 1800 ));"), "{c}");
+        assert!(c.contains("echo @@frame") && c.contains("sleep 2") && c.contains("echo @@gpu;"));
+        // 每一帧都能用原来的解析函数解析
+        let frame = OUT.split("@@now").next().unwrap();
+        assert_eq!(parse(frame, 0, None).gpus.len(), 2);
+    }
+
+    #[test]
+    fn parses_overview() {
+        let o = parse_overview("97, 61234, 81920\n0, 4, 81920\n@@done\n");
+        assert_eq!((o.gpus, o.util_avg, o.mem_used_mb, o.mem_total_mb, o.no_gpu), (2, Some(48.5), 61238.0, 163840.0, false));
+        let none = parse_overview("@@done\n");
+        assert!(none.no_gpu && none.util_avg.is_none());
     }
 
     #[test]

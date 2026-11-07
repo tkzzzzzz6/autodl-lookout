@@ -18,6 +18,10 @@ pub struct Settings {
     pub history_keep_days: i64,
     /// 关注的卡型关键字：库存页顶部显示它们在看板区域里的合计（子串匹配，不区分大小写，和规则一致）
     pub watch_models: Vec<String>,
+    /// 服务器详情实时刷新（2 秒一帧）；关掉就回到 30 秒刷新
+    pub server_live: bool,
+    /// 服务器列表显示每台的 GPU 利用率和显存（10 秒采集一次）；关掉就不采集
+    pub server_overview: bool,
 }
 
 /// 默认看板区域：V100专区、A800专区、佛山区、北京B区
@@ -35,6 +39,8 @@ impl Default for Settings {
             auto_min_balance_yuan: 10.0,
             history_keep_days: 14,
             watch_models: vec!["A100".into(), "V100".into(), "A800".into()],
+            server_live: true,
+            server_overview: true,
         }
     }
 }

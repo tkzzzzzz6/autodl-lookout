@@ -321,7 +321,21 @@ textarea.field-input { height: auto; padding: 10px 14px; resize: vertical; }
 .meter { display: inline-block; flex: 1; min-width: 60px; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
 .meter i { display: block; height: 100%; border-radius: 3px; background: var(--blue); }
 .meter.warn i { background: var(--red); }
-.gpu-line { display: grid; grid-template-columns: 26px minmax(0, 1fr) 84px 40px; align-items: center; gap: 12px; padding: 8px 16px; font-size: 13px; }
+.spark { display: block; width: 100%; min-width: 60px; height: 26px; overflow: visible; }
+.spark-area { fill: color-mix(in srgb, var(--blue) 14%, transparent); stroke: none; }
+.spark-line { fill: none; stroke: var(--blue); stroke-width: 1.6; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.spark-dash { fill: none; stroke: color-mix(in srgb, var(--blue) 55%, var(--muted, #8a94a6)); stroke-width: 1.2; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
+.live-tag { display: inline-flex; align-items: center; gap: 5px; color: var(--blue); text-transform: none; letter-spacing: 0; font-weight: 600; }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green, #34c759); box-shadow: 0 0 0 0 color-mix(in srgb, var(--green, #34c759) 60%, transparent); animation: live-pulse 1.8s ease-out infinite; }
+@keyframes live-pulse { 70% { box-shadow: 0 0 0 6px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+.ov { display: inline-flex; flex-direction: column; gap: 3px; font-size: 11px; min-width: 104px; }
+.ov.muted { font-size: 12px; min-width: 0; }
+.ov-item { display: grid; grid-template-columns: 26px 44px 30px; align-items: center; gap: 5px; }
+.ov-item small { color: var(--muted, #8a94a6); font-size: 10.5px; }
+.ov-item b { font-weight: 600; text-align: right; }
+.ov .meter { min-width: 0; width: 44px; height: 4px; }
+.gpu-line { display: grid; grid-template-columns: 26px minmax(0, 1fr) 120px 40px; align-items: center; gap: 12px; padding: 8px 16px; font-size: 13px; }
 .gpu-line + .gpu-line, .proc-line + .proc-line, .sys-line + .sys-line { border-top: 1px solid var(--sep); }
 .gpu-name { display: flex; flex-direction: column; min-width: 0; }
 .gpu-name > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
