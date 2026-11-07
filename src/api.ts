@@ -19,6 +19,13 @@ export function onSnapshot(cb: (s: Snapshot) => void): () => void {
 export interface Opt { value: string; label: string }
 export interface RefData { regions: Opt[]; pro_regions: Opt[]; gpu_specs: Opt[]; base_images: Opt[] }
 export interface StockItem { gpu_name: string; idle: number; total: number }
+/** 点开卡型时的实时价格（gpu_prices），单价都是每卡每小时、元 */
+export interface PriceTier { price_yuan: number; idle: number; machines: number; max_per_machine: number; max_cuda: number | null }
+export interface PriceInfo {
+  gpu_name: string; fetched_at: number; machines: number; idle: number;
+  min_yuan: number | null; median_yuan: number | null; max_yuan: number | null;
+  tiers: PriceTier[]; multi: { cards: number; machines: number }[]; unpriced_idle: number;
+}
 export interface Balance { assets: number; accumulate: number; voucher_balance: number }
 export interface RegionStock { region: string; region_name: string; items: StockItem[]; error: string | null; market_url: string }
 export interface RuleState { rule_id: number; hit: boolean; idle_sum: number; machines: number | null; matched: string[]; error: string | null; market_url: string }

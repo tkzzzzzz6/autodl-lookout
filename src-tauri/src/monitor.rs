@@ -160,6 +160,8 @@ pub struct Monitor {
     paused: AtomicBool,
     last_instances_check: RwLock<i64>,
     last_prune: RwLock<i64>,
+    /// 点开卡型时的价格缓存，监控按机器查到的结果也写进来
+    pub prices: crate::price::PriceCache,
 }
 
 pub type QKey = (String, Option<i64>, Option<i64>, i64, String);
@@ -176,6 +178,7 @@ impl Monitor {
             paused: AtomicBool::new(false),
             last_instances_check: RwLock::new(0),
             last_prune: RwLock::new(0),
+            prices: Default::default(),
         })
     }
 
@@ -261,6 +264,13 @@ impl Monitor {
         Ok(fresh)
     }
 
+    /// 区域（data_center）对应的机房列表，查价格用
+    pub async fn signs_of(&self, m: &MarketClient, data_center: &str) -> Result<Vec<String>, String> {
+        let map = self.region_signs(m).await?;
+        map.iter().find(|r| r.data_center == data_center).map(|r| r.signs.clone())
+            .ok_or_else(|| format!("算力市场里没有区域 {data_center}"))
+    }
+
     /// 用缓存的区域表拼算力市场链接；还没拿到区域表时退回不带区域的链接
     fn market_url_of(&self, data_center: &str) -> String {
         let cache = self.regions_cache.read().unwrap();
@@ -315,7 +325,11 @@ impl Monitor {
                     } else {
                         tokio::time::sleep(Duration::from_millis(300)).await;
                         m.machines(&signs, &names).await
-                            .map(|slots| sum_filtered(&slots, rule.max_price_yuan, rule.cuda_v_from, rule.min_per_machine))
+                            .map(|slots| {
+                                // 这些卡型的机器列表是完整的，顺手给「点开看价格」用，界面不用再查一次
+                                self.prices.put_slots(&rule.region_sign, &names, &slots);
+                                sum_filtered(&slots, rule.max_price_yuan, rule.cuda_v_from, rule.min_per_machine)
+                            })
                             .map_err(|e| e.to_string())
                     }
                 }

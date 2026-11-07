@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { LINKS, call, fmtClock, gpuAlias, isGpu, openExternal, type HistoryPoint, type RegionStock, type Rule, type Snapshot, type StockItem } from "../api";
 import { Icon } from "../icons";
+import { useGpuPrice, useNowSec } from "../hooks";
 import { Btn, CountUp, Group, Page, Segmented, Tile, softSpring, spring } from "../ui";
 import type { PageId } from "../App";
 
@@ -72,6 +73,64 @@ function History({ region, gpu }: { region: string; gpu: string }) {
   );
 }
 
+/* ---------------- 实时价格 ---------------- */
+const yuan = (v: number | null | undefined) => (v == null ? "—" : `¥${v.toFixed(2)}`);
+
+function ago(sec: number) {
+  if (sec < 5) return "刚刚更新";
+  if (sec < 60) return `${sec} 秒前更新`;
+  return `${Math.floor(sec / 60)} 分钟前更新`;
+}
+
+/** 点开卡型后的价格：用你自己的网页凭证实时查，单价随时会变 */
+function Prices({ region, gpu, idle }: { region: string; gpu: string; idle: number }) {
+  const { data, err, loading, refresh } = useGpuPrice(region, gpu, idle > 0);
+  const now = useNowSec();
+  if (idle <= 0) return null;
+  const maxTier = Math.max(1, ...(data?.tiers.map((t) => t.idle) ?? [1]));
+  return (
+    <div className="prices">
+      <div className="chart-head">
+        <span className="muted" style={{ fontSize: 12 }}>
+          实时单价{data && <> <b className="num price-range">{data.min_yuan === data.max_yuan ? yuan(data.min_yuan) : `${yuan(data.min_yuan)} – ${yuan(data.max_yuan)}`}</b> / 卡·时</>}
+        </span>
+        <span className="row" style={{ gap: 10, flexWrap: "nowrap" }}>
+          <span className="muted num" style={{ fontSize: 11.5, whiteSpace: "nowrap" }}>{data ? ago(Math.max(0, now - data.fetched_at)) : loading ? "查询中…" : ""}</span>
+          <Btn small icon="refresh" spinning={loading} onClick={refresh}>刷新</Btn>
+        </span>
+      </div>
+      {data && data.median_yuan != null && data.min_yuan !== data.max_yuan && (
+        <div className="muted" style={{ fontSize: 12 }}>一半的空闲卡不超过 <span className="num">{yuan(data.median_yuan)}</span>，共 {data.idle} 张、{data.machines} 台机器</div>
+      )}
+      {err && <div className="err-text" style={{ fontSize: 12, marginTop: 6 }}>查价格出错：{err}{data ? "（下面是上次的结果）" : ""}</div>}
+      {data && data.tiers.length > 0 && (
+        <div className="tiers">
+          {data.tiers.slice(0, 6).map((t) => (
+            <div key={t.price_yuan} className="tier">
+              <span className="num tier-price">{yuan(t.price_yuan)}</span>
+              <span className="tier-bar"><motion.i initial={{ width: 0 }} animate={{ width: `${(t.idle / maxTier) * 100}%` }} transition={softSpring} /></span>
+              <span className="num tier-idle">{t.idle} 张</span>
+              <span className="muted num tier-sub">
+                {t.machines} 台{t.max_per_machine > 1 ? `，单台最多 ${t.max_per_machine} 张` : ""}{t.max_cuda ? `，CUDA ≤ ${(t.max_cuda / 10).toFixed(1)}` : ""}
+              </span>
+            </div>
+          ))}
+          {data.tiers.length > 6 && <div className="muted" style={{ fontSize: 11.5, paddingLeft: 2 }}>还有 {data.tiers.length - 6} 个更贵的价位</div>}
+        </div>
+      )}
+      {data && (
+        <div className="row multi">
+          {data.multi.map((m) => (
+            <span key={m.cards} className={`capsule ${m.machines ? "" : "dim"}`}>单机 ≥ {m.cards} 卡<b className="num">{m.machines} 台</b></span>
+          ))}
+          {data.unpriced_idle > 0 && <span className="muted" style={{ fontSize: 11.5 }}>另有 {data.unpriced_idle} 张没标价</span>}
+        </div>
+      )}
+      {data && data.tiers.length === 0 && !err && <div className="muted" style={{ fontSize: 12, padding: "10px 0" }}>刚才查的时候已经没有可租的机器了，库存数字会在下一轮查询更新。</div>}
+    </div>
+  );
+}
+
 /* ---------------- one GPU row ---------------- */
 function GpuRow({ region, regionName, marketUrl, it, watched, open, onToggle }: {
   region: string; regionName: string; marketUrl: string; it: StockItem; watched: boolean; open: boolean; onToggle: () => void;
@@ -111,6 +170,7 @@ function GpuRow({ region, regionName, marketUrl, it, watched, open, onToggle }: 
         {open && (
           <motion.div className="expand" key="x" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }} transition={softSpring}>
+            <Prices region={region} gpu={it.gpu_name} idle={it.idle} />
             <History region={region} gpu={it.gpu_name} />
             <RentBar url={marketUrl} regionName={regionName} gpu={it.gpu_name} idle={it.idle} />
           </motion.div>

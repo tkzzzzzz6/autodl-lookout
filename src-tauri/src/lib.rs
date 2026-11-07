@@ -4,6 +4,7 @@ pub mod heatmap;
 pub mod market;
 pub mod monitor;
 mod notify;
+pub mod price;
 pub mod regions;
 mod secret;
 pub mod store;
@@ -80,6 +81,7 @@ pub fn run() {
             commands::save_template,
             commands::delete_template,
             commands::create_from_template,
+            commands::gpu_prices,
             commands::list_regular_instances,
             commands::regular_instance_password,
             commands::regular_power_on,

@@ -130,6 +130,17 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       jupyter_domain: "https://example.invalid/jupyter", service_6006_domain: "https://example.invalid/6006",
       payg_price: 3880, usage_info: { cpu_usage_percent: 34, mem_usage_percent: 61 },
     }),
+    // 假价格：几个价位，机器上空闲 1~8 张
+    gpu_prices: () => {
+      const g = String(a.gpu);
+      const base = /5090/.test(g) ? 3.08 : /4090D/.test(g) ? 1.68 : /4090/.test(g) ? 1.88 : /3090/.test(g) ? 1.38 : 2.28;
+      const tiers = [0, 0.2, 0.5].map((d, i) => ({
+        price_yuan: Math.round((base + d) * 100) / 100, idle: [14, 6, 3][i], machines: [5, 3, 1][i],
+        max_per_machine: [8, 4, 3][i], max_cuda: [128, 124, 122][i],
+      }));
+      return { gpu_name: g, fetched_at: now() - 4, machines: 9, idle: 23, min_yuan: tiers[0].price_yuan, median_yuan: tiers[0].price_yuan,
+        max_yuan: tiers[2].price_yuan, tiers, multi: [{ cards: 2, machines: 6 }, { cards: 4, machines: 3 }, { cards: 8, machines: 1 }], unpriced_idle: 0 };
+    },
     stock_history: () => Array.from({ length: 96 }, (_, i) => ({
       ts: now() - (96 - i) * 900,
       idle: Math.max(0, Math.round(6 + 6 * Math.sin(i / 9) + (i % 7) - 3)), total: 1240,
