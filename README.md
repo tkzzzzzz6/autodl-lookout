@@ -3,6 +3,11 @@
 基于 AutoDL 开放 API 的桌面工具（Tauri 2 + Rust + React）：
 监控各区域空闲显卡、有卡时发系统通知（可选自动创建 / 开机 Pro 实例）、管理普通容器实例和容器实例 Pro、余额和长时间运行提醒。
 
+## 下载
+
+到 [Releases](https://github.com/tkzzzzzz6/autodl-lookout/releases) 下载安装包：Windows 用 `*_x64-setup.exe`，macOS 按芯片选 `*_aarch64.dmg`（Apple 芯片）或 `*_x64.dmg`（Intel）。
+安装包没有代码签名：Windows 首次运行弹出「Windows 已保护你的电脑」时点「更多信息 → 仍要运行」；macOS 提示无法打开时到「系统设置 → 隐私与安全性」点「仍要打开」。
+
 ## 运行
 
 需要：Rust（`rustup`）、Node 18+。
@@ -95,8 +100,26 @@ src/
 
 测试：`npm test`（前端检查与打包 + Rust 单元测试）；只看界面：`npm run demo`。
 
-数据库位置：Windows 在 `%APPDATA%\dev.local.autodl-lookout\autodl-lookout.sqlite3`，macOS 在 `~/Library/Application Support/dev.local.autodl-lookout/`。
-从旧名字 autodl-manager 升级时，首次启动会自动把旧数据库和凭证搬过来（旧数据库文件保留不动）。
+数据库位置：Windows 在 `%APPDATA%\io.github.tkzzzzzz6.autodl-lookout\autodl-lookout.sqlite3`，macOS 在 `~/Library/Application Support/io.github.tkzzzzzz6.autodl-lookout/`。
+早期开发版的数据在 `dev.local.autodl-lookout`（更早叫 autodl-manager 时在 `dev.local.autodl-manager`），首次启动会自动把旧数据库和凭证搬过来（旧文件保留不动）。
+
+## 发版
+
+推送 `v*` tag 后，GitHub Actions（`.github/workflows/release.yml`）会打包 Windows（`.exe`、`.msi`）和 macOS（Apple 芯片、Intel 各一个 `.dmg`），挂到一个**草稿** Release 上，说明按 PR 的 label 自动分组（`.github/release.yml`）。
+
+1. 开一个 PR 改版本号，合并到 main：
+   ```bash
+   npm run version:set -- 0.2.0   # 同时改 package.json、Cargo.toml、tauri.conf.json（和两个 lock 文件）
+   ```
+2. 在 main 最新的提交上打 tag 并推送：
+   ```bash
+   git checkout main && git pull
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+3. 等 Actions 里的「发版」跑完（大约 15–25 分钟），到 Releases 打开草稿，下载安装包试一下，没问题点「Publish release」。
+
+tag 和版本号对不上时 workflow 会直接失败；已经发布的版本不会被覆盖，要重发就换一个版本号。也可以在 Actions 页面手动运行「发版」，填一个已经推送的 tag。
 
 ## 参与贡献
 

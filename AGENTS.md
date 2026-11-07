@@ -11,7 +11,7 @@
 - 每项工作对应一个 issue。没有 issue 时，先按 `.github/ISSUE_TEMPLATE/` 的格式起草，写明背景、工作范围、验收标准和不做的内容，由维护者确认后再动手。
 - 从最新的 `origin/main` 拉分支，一个 issue 一个分支、一个 PR。分支命名：`<agent>/<issue 编号>-<简短英文描述>`，例如 `claude/3-webhook-notify`、`codex/4-per-machine-rule`。人工分支可用 `feat/...`、`fix/...`。
 - 动手前先读 issue 里列出的参考入口，以及本文件后面的「两种凭证」「已知坑」「安全和钱」。
-- 你只能看到已经推送到 GitHub 的内容。维护者本机未推送的改动、本机数据（`%APPDATA%\dev.local.autodl-lookout\` 下的 SQLite 数据库：规则、模板、库存历史、日志）和系统凭据管理器里的凭证都不在你的工作副本里；需要时在 issue 或 PR 里说明，不要猜测它们的内容，也不要索要真实凭证。
+- 你只能看到已经推送到 GitHub 的内容。维护者本机未推送的改动、本机数据（`%APPDATA%\io.github.tkzzzzzz6.autodl-lookout\` 下的 SQLite 数据库：规则、模板、库存历史、日志）和系统凭据管理器里的凭证都不在你的工作副本里；需要时在 issue 或 PR 里说明，不要猜测它们的内容，也不要索要真实凭证。
 
 ### 实现
 
@@ -65,6 +65,7 @@ npm run build          # 只做前端类型检查 + 打包到 dist/（Rust 编�
 npm run demo           # 离线演示：浏览器打开 http://localhost:1420 ，用 src/mock.ts 的假数据
 npm run tauri dev      # 桌面开发模式（需要真实凭证才有数据）
 npm run tauri build    # 打安装包，产物在 src-tauri/target/release/bundle/
+npm run version:set -- 0.2.0   # 发版前改版本号（三处一起改，见 README「发版」）
 ```
 
 演示模式下顶栏会显示「预览数据」标记，不需要 AutoDL 账号。
@@ -130,7 +131,9 @@ design/         设计稿 SVG（B2 风格）和应用图标源文件
 - 卡型名有两套：库存用 `RTX 4090`、`vGPU-48GB`，Pro 创建用 `gpu_spec_uuid`（`4090D`、`5090-p`、`v-48g`…）。规则用关键字子串匹配，`4090` 会同时匹配 4090 和 4090D。
 - 库存按单卡统计，多卡机器不一定开得出来。
 - 用户粘贴的凭证可能带 `Bearer `、引号、换行，统一走 `api::clean_token`。
-- 应用曾叫 `autodl-manager`：`lib.rs` 的 `migrate_legacy_db` 和 `secret.rs` 的 `LEGACY_SERVICE` 负责把旧数据搬过来，不要删。
+- 应用曾叫 `autodl-manager`，应用标识也从 `dev.local.autodl-lookout` 改成了 `io.github.tkzzzzzz6.autodl-lookout`：`lib.rs` 的 `migrate_legacy_db`（`LEGACY_DBS`）和 `secret.rs` 的 `LEGACY_SERVICE` 负责把旧数据搬过来，不要删。钥匙串服务名 `secret::SERVICE` 故意没跟着标识改，也不要改。
+- 应用标识（`tauri.conf.json` 的 `identifier`）决定数据目录，发版后不要再改。
+- 发版只通过推送 `v*` tag 触发（`.github/workflows/release.yml`），只建草稿，由维护者发布。Agent 不要打 tag、不要发布 Release；改版本号用 `npm run version:set`，三处版本号必须一致（CI 会检查）。
 
 ## 安全和钱
 

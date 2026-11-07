@@ -1,0 +1,42 @@
+# PR 和 main 的检查：和本地的 npm test 一样（tsc + vite build + cargo test），Windows 和 Ubuntu 各跑一遍
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: npm test（${{ matrix.os }}）
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux 编译 Tauri 需要的系统库
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - run: npm ci
+      - name: 三处版本号一致
+        run: node scripts/version.mjs check
+      - name: npm test（不允许新的 warning）
+        run: npm test
+        env:
+          RUSTFLAGS: -D warnings
