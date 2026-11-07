@@ -78,9 +78,9 @@ src-tauri/src/
   monitor.rs    后台轮询：库存 → 历史 → 规则 → 通知 / 自动动作；余额、运行时长、凭证过期提醒
   price.rs      点开卡型时的实时价格：汇总分档，缓存 + 合并请求 + 全局限流
   servers.rs    服务器页：AutoDL 实例 + 自己的服务器的统一视图、SSH 别名、要写进 SSH 配置的条目
-  ssh.rs        SSH 连接池（russh）：认证、执行命令、主机密钥记忆、软件密钥生成和推送
+  ssh.rs        SSH 连接池（russh）：认证、执行命令、常驻命令的流式输出（stream + FrameSplitter）、主机密钥记忆、软件密钥生成和推送
   sshconfig.rs  ~/.ssh/config 解析、软件管理段的读写、主机名 / 用户名校验
-  serverstat.rs 服务器状态：采集脚本、nvidia-smi / ps / df 输出解析、空闲 / 训练结束 / 磁盘提醒判断
+  serverstat.rs 服务器状态：采集脚本（一次性 / 实时循环 live_command / 列表概览 overview_command）、nvidia-smi / ps / df 输出解析、空闲 / 训练结束 / 磁盘提醒判断
   terminal.rs   打开系统终端执行 ssh（Windows Terminal / cmd、macOS 终端、Linux 终端）
   heatmap.rs    抢卡时段：库存历史按「星期 × 小时」聚合、一句话结论
   store.rs      SQLite：设置、规则、模板、库存历史、日志
@@ -155,4 +155,5 @@ design/         设计稿 SVG（B2 风格）和应用图标源文件
 - 新的 Tauri 命令：在 `commands.rs` 实现，在 `lib.rs` 的 `generate_handler!` 注册；前端通过 `api.ts` 的 `call()` 调用，参数名用 camelCase（Tauri 自动转 snake_case）。如果浏览器预览要用到，同时在 `mock.ts` 里加假数据。
 - 数据库结构变化要兼容老数据（`CREATE TABLE IF NOT EXISTS`、新增列给默认值）。
 - 轮询间隔最少 30 秒，出错时指数退避到 10 分钟，不要为了“更实时”去掉。前端页面自己的定时刷新也一样（见 `Instances.tsx` 的 `usePolling`、`hooks.ts` 的 `useGpuPrice`）。
+- 「最少 30 秒」是对 AutoDL 接口的要求。服务器详情的 2 秒实时刷新、列表的 10 秒概览连的是用户自己的服务器（SSH），只在界面开着且窗口可见时采集，并受设置里的 `server_live` / `server_overview` 开关控制；改这里时保持「看的时候才采、关掉就停」（`hooks.ts` 的 `useServerStatus`、`commands.rs` 的 `start_live` / `stop_live` / `servers_overview`）。
 - 新增调用 AutoDL 的按需查询（用户点开才查的那种）走缓存 + 合并请求 + 限流，参考 `price.rs`；不要让界面直接、反复地打上游。

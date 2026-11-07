@@ -683,6 +683,140 @@ pub async fn trust_host_key(st: State<'_, AppState>, id: String) -> R<()> {
     Ok(())
 }
 
+// ---------- 服务器实时状态 ----------
+
+#[derive(Serialize, Clone)]
+pub struct LiveEvent {
+    pub id: String,
+    pub status: Option<ServerStatus>,
+    /// 采集结束（被停掉、出错、或远程循环到点退出且界面没再要）
+    pub ended: bool,
+    pub error: Option<String>,
+}
+
+fn stop_live_inner(st: &State<'_, AppState>, id: &str) {
+    if let Some(tx) = st.monitor.live.lock().unwrap().remove(id) {
+        let _ = tx.send(true);
+    }
+}
+
+/// 开始实时刷新：在服务器上起常驻采集循环（serverstat::live_command），每 2 秒一帧，
+/// 通过 `server-live` 事件推给界面。同一台只保留一个；设置里关了「详情实时刷新」就不起
+#[tauri::command]
+pub async fn start_live(app: tauri::AppHandle, st: State<'_, AppState>, id: String) -> R<()> {
+    use tauri::Emitter;
+    if !st.store.settings().server_live {
+        return Err("设置里关了「详情实时刷新」".into());
+    }
+    stop_live_inner(&st, &id);
+    let v = find_server(&st, &id).await?;
+    // 先用普通执行把连接建好（推过公钥用密钥，否则带密码），之后的常驻命令复用这条连接
+    ssh_exec(&st, &v, "true").await?;
+    let pw = servers::password(&st.monitor, &v).await.ok().flatten();
+    let t = servers::target(&v, pw);
+    let w = load_watch(&st, &id);
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    st.monitor.live.lock().unwrap().insert(id.clone(), tx.clone());
+    let mon = st.monitor.clone();
+    tauri::async_runtime::spawn(async move {
+        let cmd = crate::serverstat::live_command(Some(&w));
+        let mut error = None;
+        loop {
+            let mut sp = crate::ssh::FrameSplitter::default();
+            let (app2, id2, w2) = (app.clone(), id.clone(), w.clone());
+            let r = mon.ssh.stream(&t, &cmd, move |d| {
+                for frame in sp.push(d, crate::serverstat::LIVE_SEP) {
+                    let status = crate::serverstat::parse(&frame, now(), Some(&w2));
+                    let _ = app2.emit("server-live", LiveEvent { id: id2.clone(), status: Some(status), ended: false, error: None });
+                }
+            }, rx.clone()).await;
+            match r {
+                Ok(true) => break,                                 // 界面让停
+                // 远程循环到点（30 分钟）退出：界面还让采集、窗口也还在前台才再起一个，防止界面异常退出后一直续
+                Ok(false) if !*rx.borrow() && window_shown(&app) => continue,
+                Ok(false) => break,
+                Err(e) => {
+                    error = Some(e);
+                    break;
+                }
+            }
+        }
+        // 只清掉自己这一个（期间界面可能已经重新开始了一个新的）
+        {
+            let mut live = mon.live.lock().unwrap();
+            if live.get(&id).is_some_and(|cur| cur.same_channel(&tx)) {
+                live.remove(&id);
+            }
+        }
+        let _ = app.emit("server-live", LiveEvent { id, status: None, ended: true, error });
+    });
+    Ok(())
+}
+
+fn window_shown(app: &tauri::AppHandle) -> bool {
+    use tauri::Manager;
+    app.get_webview_window("main")
+        .is_some_and(|w| w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false))
+}
+
+#[tauri::command]
+pub fn stop_live(st: State<'_, AppState>, id: String) {
+    stop_live_inner(&st, &id);
+}
+
+/// 列表概览：每台的 GPU 平均利用率和显存。只采集自己的服务器和运行中的 AutoDL 实例，
+/// 最多同时 4 台、单台 8 秒超时，出错从 30 秒起退避到 10 分钟；设置里关了就直接返回空
+#[tauri::command]
+pub async fn servers_overview(st: State<'_, AppState>) -> R<std::collections::HashMap<String, crate::serverstat::Overview>> {
+    let mut out = std::collections::HashMap::new();
+    if !st.store.settings().server_overview {
+        return Ok(out);
+    }
+    let (insts, _) = autodl_instances(&st).await;
+    let views: Vec<ServerView> = servers::views(&st.store, &insts, &st.store.servers()?, &[])
+        .into_iter()
+        .filter(|v| !v.host.is_empty() && (v.kind != "autodl" || v.status.as_deref() == Some("running")))
+        .collect();
+    let ts = now();
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
+    let mut set = tokio::task::JoinSet::new();
+    for v in views {
+        let (next_try, delay) = st.monitor.overview_backoff.lock().unwrap().get(&v.id).copied().unwrap_or((0, 0));
+        if ts < next_try {
+            out.insert(v.id.clone(), crate::serverstat::Overview { error: Some("连接失败，稍后重试".into()), ..Default::default() });
+            continue;
+        }
+        let (mon, sem) = (st.monitor.clone(), sem.clone());
+        set.spawn(async move {
+            let _p = sem.acquire_owned().await;
+            let r = tokio::time::timeout(std::time::Duration::from_secs(8),
+                servers::exec(&mon, &v, crate::serverstat::overview_command())).await;
+            let r = match r {
+                Ok(Ok(o)) => Ok(crate::serverstat::parse_overview(&o.stdout)),
+                Ok(Err(e)) => Err(e),
+                Err(_) => Err("连接超时".to_string()),
+            };
+            (v.id, delay, r)
+        });
+    }
+    while let Some(j) = set.join_next().await {
+        let Ok((id, delay, r)) = j else { continue };
+        match r {
+            Ok(o) => {
+                st.monitor.overview_backoff.lock().unwrap().remove(&id);
+                out.insert(id, o);
+            }
+            Err(e) => {
+                let d = if delay == 0 { 30 } else { (delay * 2).min(600) };
+                st.monitor.overview_backoff.lock().unwrap().insert(id.clone(), (ts + d, d));
+                let msg = if e.starts_with(crate::ssh::HOSTKEY_CHANGED) { "主机密钥变了，点开处理".to_string() } else { e };
+                out.insert(id, crate::serverstat::Overview { error: Some(msg), ..Default::default() });
+            }
+        }
+    }
+    Ok(out)
+}
+
 // ---------- 服务器状态和提醒 ----------
 
 use crate::serverstat::{ServerStatus, Watch};

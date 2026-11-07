@@ -179,6 +179,10 @@ pub struct Monitor {
     watch_list_backoff: Mutex<(i64, i64)>,
     /// 公共基础镜像列表，1 小时内复用
     images_cache: tokio::sync::Mutex<Option<(i64, Vec<crate::market::BaseImage>)>>,
+    /// 服务器详情的实时刷新：id → 停止信号。同一台只保留一个，界面关掉 / 隐藏时发停止
+    pub live: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
+    /// 列表概览单台出错时的退避：id → (下次可以采集的时间, 当前退避秒数)
+    pub overview_backoff: Mutex<HashMap<String, (i64, i64)>>,
 }
 
 /// 实例列表缓存时间：服务器页、状态面板、后台提醒在这段时间内共用一次查询
@@ -207,6 +211,8 @@ impl Monitor {
             pw_cache: Mutex::new(HashMap::new()),
             watch_list_backoff: Mutex::new((0, 0)),
             images_cache: tokio::sync::Mutex::new(None),
+            live: Mutex::new(HashMap::new()),
+            overview_backoff: Mutex::new(HashMap::new()),
         })
     }
 

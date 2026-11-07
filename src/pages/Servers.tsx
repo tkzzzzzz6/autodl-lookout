@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { usePolled, useNowSec } from "../hooks";
+import { LIVE_KEEP, usePolled, useNowSec, useServerStatus } from "../hooks";
 import { AnimatePresence, motion } from "motion/react";
-import { HOSTKEY_CHANGED, call, type HostEntry, type Probe, type ServerList, type ServerRecord, type ServerStatus, type ServerView, type Watch } from "../api";
+import { HOSTKEY_CHANGED, call, setSetting, type HostEntry, type Overview, type Probe, type ServerList, type ServerRecord, type ServerView, type Settings, type Watch } from "../api";
 import { Icon } from "../icons";
 import { Btn, ConfirmButton, FormRow, Group, Page, Row, Segmented, Sheet, Stepper, Switch, copy, softSpring, stagger, useAction, useToast } from "../ui";
 
@@ -24,17 +24,52 @@ function Meter({ ratio, warn }: { ratio: number; warn?: boolean }) {
   );
 }
 
-function StatusPanel({ v, onChanged }: { v: ServerView; onChanged: () => void }) {
-  const { data, err, loading, refresh } = usePolled<ServerStatus>(v.id, () => call<ServerStatus>("server_status", { id: v.id }), true);
+/** 最近 5 分钟的小折线：values 是 0–100，实线带填充；dash 是第二条虚线（显存）。右端对齐最新一帧 */
+function Spark({ values, dash, warn }: { values: (number | null)[]; dash?: number[]; warn?: boolean }) {
+  const W = LIVE_KEEP - 1;
+  const pts = (xs: (number | null)[]) => {
+    const off = W - (xs.length - 1);
+    return xs.map((y, i) => (y == null ? null : `${off + i},${(100 - Math.max(0, Math.min(100, y))).toFixed(1)}`)).filter(Boolean) as string[];
+  };
+  const main = pts(values);
+  if (main.length < 2) return <span className="spark" />;
+  const first = main[0].split(",")[0], last = main[main.length - 1].split(",")[0];
+  const d2 = dash ? pts(dash) : [];
+  return (
+    <svg className={`spark ${warn ? "warn" : ""}`} viewBox={`0 -2 ${W} 104`} preserveAspectRatio="none" aria-hidden>
+      <path className="spark-area" d={`M${first},100 L${main.join(" L")} L${last},100 Z`} />
+      <polyline className="spark-line" points={main.join(" ")} />
+      {d2.length > 1 && <polyline className="spark-dash" points={d2.join(" ")} />}
+    </svg>
+  );
+}
+
+function StatusPanel({ v, onChanged, live, setLive }: { v: ServerView; onChanged: () => void; live: boolean; setLive: (on: boolean) => void }) {
+  const { data, err, loading, refresh, history, streaming, liveErr } = useServerStatus(v.id, live);
   const now = useNowSec();
   const { busy, run } = useAction();
   const idle = !!data && v.kind === "autodl" && data.gpus.length > 0 && data.gpus.every((g) => g.util < 5);
+  const hasCurve = history.length >= 2;
   return (
     <>
       <div className="group-label row" style={{ justifyContent: "space-between" }}>
-        <span>状态{data ? `（${Math.max(0, now - data.fetched_at)} 秒前）` : ""}</span>
-        <Btn small icon="refresh" spinning={loading} onClick={refresh}>刷新</Btn>
+        <span className="row" style={{ gap: 6 }}>
+          状态
+          {streaming
+            ? <span className="live-tag"><i className="live-dot" />实时 · 每 2 秒</span>
+            : data ? <span>（{Math.max(0, now - data.fetched_at)} 秒前）</span> : null}
+        </span>
+        <span className="row" style={{ gap: 8 }}>
+          <span className="muted" style={{ textTransform: "none", letterSpacing: 0 }}>实时</span>
+          <Switch label="详情实时刷新" checked={live} onChange={setLive} />
+          {!streaming && <Btn small icon="refresh" spinning={loading} onClick={refresh}>刷新</Btn>}
+        </span>
       </div>
+      {liveErr && (
+        <div className="group-foot err-text" style={{ marginTop: -4, marginBottom: 8 }}>
+          实时刷新没有起来，先改成 30 秒刷新一次：{liveErr.startsWith(HOSTKEY_CHANGED) ? "主机密钥变了" : liveErr}。点「刷新」再试一次实时。
+        </div>
+      )}
       {err && !data && <Group><div className="group-row err-text">{err.startsWith(HOSTKEY_CHANGED) ? "主机密钥变了，点上面的「测试连接」处理后再看状态。" : err}</div></Group>}
       {!data && !err && <Group><div className="empty-state">正在连接服务器…</div></Group>}
       {data && (
@@ -61,11 +96,14 @@ function StatusPanel({ v, onChanged }: { v: ServerView; onChanged: () => void })
                     {g.temp != null ? ` · ${g.temp.toFixed(0)}°C` : ""}{g.power_w != null ? ` · ${g.power_w.toFixed(0)}W` : ""}
                   </small>
                 </span>
-                <Meter ratio={g.util / 100} />
+                {hasCurve
+                  ? <Spark values={history.map((p) => p.gpus[g.index]?.util ?? null)} dash={history.map((p) => p.gpus[g.index]?.mem ?? 0)} />
+                  : <Meter ratio={g.util / 100} />}
                 <span className="num gpu-util">{g.util.toFixed(0)}%</span>
               </div>
             ))}
           </Group>
+          {hasCurve && data.gpus.length > 0 && <div className="group-foot">曲线是最近 {Math.max(1, Math.round((history.length * 2) / 60))} 分钟：实线是利用率，虚线是显存。只在面板开着时记录，不写数据库。</div>}
           {data.procs.length > 0 && (
             <>
               <div className="group-label">占用显卡的进程</div>
@@ -89,10 +127,12 @@ function StatusPanel({ v, onChanged }: { v: ServerView; onChanged: () => void })
           <div className="group-label">系统</div>
           <Group>
             {data.load1 != null && (
-              <div className="sys-line"><span>CPU 负载</span><Meter ratio={data.cores ? data.load1 / data.cores : 0} /><span className="num">{data.load1.toFixed(1)} / {data.cores ?? "?"} 核</span></div>
+              <div className="sys-line"><span>CPU 负载</span>
+                {hasCurve ? <Spark values={history.map((p) => p.load)} /> : <Meter ratio={data.cores ? data.load1 / data.cores : 0} />}<span className="num">{data.load1.toFixed(1)} / {data.cores ?? "?"} 核</span></div>
             )}
             {data.mem_total != null && data.mem_avail != null && (
-              <div className="sys-line"><span>内存</span><Meter ratio={1 - data.mem_avail / data.mem_total} />
+              <div className="sys-line"><span>内存</span>
+                {hasCurve ? <Spark values={history.map((p) => p.mem)} /> : <Meter ratio={1 - data.mem_avail / data.mem_total} />}
                 <span className="num">{gb(data.mem_total - data.mem_avail)} / {gb(data.mem_total)}</span></div>
             )}
             {data.disks.map((d) => (
@@ -144,7 +184,7 @@ function WatchEditor({ v }: { v: ServerView }) {
 }
 
 /* ---------------- 详情 ---------------- */
-function Detail({ v, list, onChanged, onEdit }: { v: ServerView; list: ServerList; onChanged: () => void; onEdit: () => void }) {
+function Detail({ v, list, onChanged, onEdit, live, setLive }: { v: ServerView; list: ServerList; onChanged: () => void; onEdit: () => void; live: boolean; setLive: (on: boolean) => void }) {
   const { busy, run } = useAction();
   const toast = useToast();
   const [probe, setProbe] = useState<Probe | null>(null);
@@ -214,7 +254,7 @@ function Detail({ v, list, onChanged, onEdit }: { v: ServerView; list: ServerLis
         )}
       </AnimatePresence>
 
-      {!noSsh && (v.kind !== "autodl" || v.status === "running") && <StatusPanel v={v} onChanged={onChanged} />}
+      {!noSsh && (v.kind !== "autodl" || v.status === "running") && <StatusPanel v={v} onChanged={onChanged} live={live} setLive={setLive} />}
       {!noSsh && <WatchEditor v={v} />}
 
       <div className="group-label">连接</div>
@@ -331,6 +371,20 @@ function Importer({ onDone }: { onDone: () => void }) {
   );
 }
 
+/* ---------------- 列表概览 ---------------- */
+function OvBars({ o }: { o?: Overview }) {
+  if (!o) return null;
+  if (o.error) return <span className="ov muted" title={o.error}>连不上</span>;
+  if (o.no_gpu || o.util_avg == null) return <span className="ov muted">无 GPU</span>;
+  const mem = o.mem_total_mb > 0 ? o.mem_used_mb / o.mem_total_mb : 0;
+  return (
+    <span className="ov" title={`${o.gpus} 张卡，GPU 平均利用率 ${o.util_avg.toFixed(0)}%，显存 ${(o.mem_used_mb / 1024).toFixed(0)} / ${(o.mem_total_mb / 1024).toFixed(0)} GB`}>
+      <span className="ov-item"><small>GPU</small><Meter ratio={o.util_avg / 100} /><b className="num">{o.util_avg.toFixed(0)}%</b></span>
+      <span className="ov-item"><small>显存</small><Meter ratio={mem} warn={mem >= 0.95} /><b className="num">{(mem * 100).toFixed(0)}%</b></span>
+    </span>
+  );
+}
+
 /* ---------------- 页面 ---------------- */
 type SheetState = { kind: "detail"; id: string } | { kind: "edit"; rec: ServerRecord } | { kind: "import" } | null;
 
@@ -341,6 +395,14 @@ export default function ServersPage() {
   const [loading, setLoading] = useState(false);
   const { busy, run } = useAction();
   const toast = useToast();
+  // 两个开关存在设置里（设置页也能改），这里只读写这两项
+  const [prefs, setPrefs] = useState<Pick<Settings, "server_live" | "server_overview"> | null>(null);
+  useEffect(() => { call<Settings>("get_settings").then((s) => setPrefs({ server_live: s.server_live ?? true, server_overview: s.server_overview ?? true })).catch(() => {}); }, []);
+  const togglePref = async (k: "server_live" | "server_overview", on: boolean) => {
+    // 先存再切：后端 start_live / servers_overview 会看这两项设置
+    try { await setSetting(k, on); setPrefs((p) => (p ? { ...p, [k]: on } : p)); } catch (e) { toast(errText(e)); }
+  };
+  const ov = usePolled<Record<string, Overview>>("overview", () => call<Record<string, Overview>>("servers_overview"), !!prefs?.server_overview && !!list, 10_000);
 
   const load = () => {
     setLoading(true);
@@ -374,6 +436,7 @@ export default function ServersPage() {
         <Row icon="server" grey={v.kind === "autodl" && v.status !== "running"} label={<b style={{ fontWeight: 600 }}>{v.name}</b>} sub={sub}
           selected={selected?.id === v.id} onClick={() => setSheet({ kind: "detail", id: v.id })} chevron
           right={<span className="row" style={{ gap: 6 }}>
+            {prefs?.server_overview && <OvBars o={ov.data?.[v.id]} />}
             {v.key_pushed && <span className="capsule">免密</span>}
             {st && <span className={`capsule ${st[1]}`}>{st[0]}</span>}
           </span>} />
@@ -391,6 +454,12 @@ export default function ServersPage() {
         <Btn icon="doc" onClick={() => setSheet({ kind: "import" })}>从 SSH 配置导入</Btn>
         <Btn icon="refresh" disabled={busy} onClick={sync}>同步到 SSH 配置</Btn>
         <span style={{ flex: 1 }} />
+        {prefs && (
+          <span className="row" style={{ gap: 8, fontSize: 13 }}>
+            <span className="muted">列表状态</span>
+            <Switch label="列表显示服务器状态" checked={prefs.server_overview} onChange={(on) => togglePref("server_overview", on)} />
+          </span>
+        )}
         {list && (
           <span className="row" style={{ gap: 8, fontSize: 13 }}>
             <span className="muted">自动同步</span>
@@ -442,7 +511,8 @@ export default function ServersPage() {
         title={sheet?.kind === "edit" ? (sheet.rec.id ? "编辑服务器" : "添加服务器") : sheet?.kind === "import" ? "从 SSH 配置导入" : selected?.name ?? ""}
         left={<span />} right={<button className="link-btn bold" onClick={() => setSheet(null)}>完成</button>}>
         {sheet?.kind === "detail" && selected && list && (
-          <Detail v={selected} list={list} onChanged={() => { load(); }} onEdit={() => setSheet({ kind: "edit", rec: editRecord(selected) })} />
+          <Detail v={selected} list={list} onChanged={() => { load(); }} onEdit={() => setSheet({ kind: "edit", rec: editRecord(selected) })}
+            live={prefs?.server_live ?? true} setLive={(on) => togglePref("server_live", on)} />
         )}
         {sheet?.kind === "edit" && <Editor key={sheet.rec.id} init={sheet.rec} onSaved={() => { setSheet(null); load(); }} />}
         {sheet?.kind === "import" && <Importer onDone={() => { setSheet(null); load(); toast("已导入"); }} />}
