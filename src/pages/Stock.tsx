@@ -1,9 +1,9 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { LINKS, call, fmtClock, gpuAlias, isGpu, openExternal, type HistoryPoint, type RegionStock, type Rule, type Snapshot, type StockItem } from "../api";
+import { LINKS, call, fmtClock, gpuAlias, isGpu, openExternal, type HistoryPoint, type RegionStock, type Rule, type Settings, type Snapshot, type StockItem } from "../api";
 import { Icon } from "../icons";
 import { useGpuPrice, useNowSec } from "../hooks";
-import { Btn, CountUp, Group, Page, Segmented, Tile, softSpring, spring } from "../ui";
+import { Btn, CountUp, Group, Page, Segmented, Tile, softSpring, spring, useRefData } from "../ui";
 import type { PageId } from "../App";
 
 const FULL = 40; // 进度条满格 = 40 张
@@ -132,8 +132,10 @@ function Prices({ region, gpu, idle }: { region: string; gpu: string; idle: numb
 }
 
 /* ---------------- one GPU row ---------------- */
-function GpuRow({ region, regionName, marketUrl, it, watched, open, onToggle }: {
+function GpuRow({ region, regionName, marketUrl, it, watched, open, onToggle, title, sub }: {
   region: string; regionName: string; marketUrl: string; it: StockItem; watched: boolean; open: boolean; onToggle: () => void;
+  /** 按卡型看时，行标题是区域名 */
+  title?: string; sub?: string;
 }) {
   const prev = useRef(it.idle);
   const [flash, setFlash] = useState(0);
@@ -141,7 +143,7 @@ function GpuRow({ region, regionName, marketUrl, it, watched, open, onToggle }: 
     if (prev.current === 0 && it.idle > 0) setFlash(Date.now()); // 从没有到有：闪一下
     prev.current = it.idle;
   }, [it.idle]);
-  const alias = gpuAlias(it.gpu_name);
+  const alias = sub ?? gpuAlias(it.gpu_name);
   return (
     <>
       <motion.div role="button" tabIndex={0} aria-expanded={open} className="group-row tappable"
@@ -155,7 +157,7 @@ function GpuRow({ region, regionName, marketUrl, it, watched, open, onToggle }: 
         </AnimatePresence>
         <Tile name="gpu_s" grey={!watched} badge={watched} size={23} />
         <div className="grow" style={{ flex: "0 0 128px" }}>
-          <div className={`label ${it.idle ? "" : "dim"}`} style={{ fontWeight: watched ? 550 : 400 }}>{it.gpu_name}</div>
+          <div className={`label ${it.idle ? "" : "dim"}`} style={{ fontWeight: watched ? 550 : 400 }}>{title ?? it.gpu_name}</div>
           {alias && <div className="sub">{alias}</div>}
         </div>
         <div className="bar" style={{ flex: 1 }}>
@@ -235,12 +237,127 @@ function RegionGroup({ rs, rules }: { rs: RegionStock; rules: Rule[] }) {
   );
 }
 
+/* ---------------- 按卡型 ---------------- */
+type Loc = { rs: RegionStock; it: StockItem };
+const matchKw = (name: string, kw: string) => name.toLowerCase().includes(kw.trim().toLowerCase());
+
+/** 所有看板区域里的卡，按卡型名合并：卡型 → 各区 */
+function byModel(regions: RegionStock[]) {
+  const m = new Map<string, Loc[]>();
+  for (const rs of regions) {
+    if (rs.error) continue;
+    for (const it of rs.items.filter((i) => isGpu(i.gpu_name))) {
+      m.set(it.gpu_name, [...(m.get(it.gpu_name) ?? []), { rs, it }]);
+    }
+  }
+  return m;
+}
+
+/** 顶部「关注卡型」：每个关键字在看板区域里的空闲合计 / 总数，以及分布在哪些区 */
+function WatchSummary({ regions, models, onPick, picked }: { regions: RegionStock[]; models: string[]; onPick: (kw: string) => void; picked: string | null }) {
+  if (models.length === 0) return null;
+  const all = [...byModel(regions).entries()];
+  return (
+    <div className="watch-cards">
+      {models.map((kw) => {
+        const locs = all.filter(([name]) => matchKw(name, kw)).flatMap(([, l]) => l);
+        const idle = locs.reduce((a, l) => a + l.it.idle, 0);
+        const total = locs.reduce((a, l) => a + l.it.total, 0);
+        // 同一区可能有好几种匹配的卡（如 A100 40G / 80G），按区合计
+        const perRegion = new Map<string, number>();
+        locs.forEach((l) => perRegion.set(l.rs.region_name, (perRegion.get(l.rs.region_name) ?? 0) + l.it.idle));
+        const where = [...perRegion.entries()].sort((a, b) => b[1] - a[1]);
+        return (
+          <motion.button key={kw} className={`watch-card glass ${picked === kw ? "picked" : ""}`} whileTap={{ scale: .98 }} transition={spring}
+            onClick={() => onPick(kw)} aria-pressed={picked === kw} aria-label={`${kw} 空闲 ${idle} 张，共 ${total} 张`}>
+            <span className="wc-head"><Icon name="gpu_s" size={16} stroke={1.8} /><b>{kw}</b></span>
+            <span className="wc-num num"><CountUp value={idle} className={idle ? "" : "zero"} /><small> / {total} 张空闲</small></span>
+            <span className="wc-where muted">
+              {locs.length === 0 ? "看板区域里没有这种卡" : where.map(([r, n]) => `${r} ${n}`).join(" · ")}
+            </span>
+          </motion.button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ModelView({ regions, rules, models, focus, onClearFocus }: {
+  regions: RegionStock[]; rules: Rule[]; models: string[]; focus: string | null; onClearFocus: () => void;
+}) {
+  const [open, setOpen] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const watched = (rs: RegionStock, name: string) =>
+    rules.some((r) => r.enabled && r.region_sign === rs.region && matchKw(name, r.gpu_keyword));
+  const isFav = (name: string) => models.some((kw) => matchKw(name, kw));
+  let list = [...byModel(regions).entries()].map(([name, locs]) => ({
+    name, locs: [...locs].sort((a, b) => b.it.idle - a.it.idle),
+    idle: locs.reduce((a, l) => a + l.it.idle, 0), total: locs.reduce((a, l) => a + l.it.total, 0),
+  }));
+  if (focus) list = list.filter((m) => matchKw(m.name, focus));
+  // 关注的卡型在前，然后按空闲数
+  list.sort((a, b) => Number(isFav(b.name)) - Number(isFav(a.name)) || b.idle - a.idle || a.name.localeCompare(b.name));
+  const primary = focus ? list : list.filter((m) => m.idle > 0 || isFav(m.name));
+  const shown = showAll ? list : primary;
+
+  return (
+    <>
+      {focus && (
+        <div className="row" style={{ gap: 8, marginBottom: 14 }}>
+          <span className="capsule on">只看名字含「{focus}」的卡型</span>
+          <Btn small icon="x" onClick={onClearFocus}>看全部卡型</Btn>
+        </div>
+      )}
+      <div className="regions">
+        {shown.map((m) => (
+          <section key={m.name}>
+            <div className="section-title">
+              <Icon name="gpu_s" size={20} stroke={1.8} />
+              <h2>{m.name}</h2>
+              <span className="aside num">{m.locs.length} 个区，共 <CountUp value={m.idle} /> / {m.total} 张空闲</span>
+            </div>
+            <Group>
+              {m.locs.map(({ rs, it }) => {
+                const key = `${rs.region}|${it.gpu_name}`;
+                return (
+                  <GpuRow key={key} region={rs.region} regionName={rs.region_name} marketUrl={rs.market_url} it={it}
+                    watched={watched(rs, it.gpu_name)} title={rs.region_name} sub={`共 ${it.total} 张`}
+                    open={open === key} onToggle={() => setOpen(open === key ? null : key)} />
+                );
+              })}
+            </Group>
+          </section>
+        ))}
+      </div>
+      {shown.length === 0 && <div className="empty-state">{focus ? `看板区域里没有名字含「${focus}」的卡型。` : "看板区域里暂时没有显卡数据。"}</div>}
+      {!focus && list.length > primary.length && (
+        <div className="row" style={{ justifyContent: "center", marginTop: 18 }}>
+          <Btn small onClick={() => setShowAll(!showAll)}>{showAll ? "只看有空闲和关注的卡型" : `显示其余 ${list.length - primary.length} 种卡型`}</Btn>
+        </div>
+      )}
+    </>
+  );
+}
+
+type View = "region" | "model";
+function loadView(): View {
+  try { return localStorage.getItem("stock-view") === "model" ? "model" : "region"; } catch { return "region"; }
+}
+
 /* ---------------- page ---------------- */
 export default function StockPage({ snap, go }: { snap: Snapshot | null; go: (p: PageId) => void }) {
   const [rules, setRules] = useState<Rule[]>([]);
   useEffect(() => { call<Rule[]>("list_rules").then(setRules); }, [snap?.rules.length]);
+  const [models, setModels] = useState<string[]>([]);
+  useEffect(() => { call<Settings>("get_settings").then((s) => setModels(s.watch_models ?? [])); }, []);
+  const [view, setViewState] = useState<View>(loadView);
+  const setView = (v: View) => { setViewState(v); try { localStorage.setItem("stock-view", v); } catch { /* 预览里可能不可用 */ } };
+  const [focus, setFocus] = useState<string | null>(null);
 
-  const regionName = (sign: string) => snap?.regions.find((r) => r.region === sign)?.region_name ?? sign;
+  const ref = useRefData();
+  // 规则里的区域不一定在看板区域里，名字从区域对照表找，别直接显示代码
+  const regionName = (sign: string) =>
+    snap?.regions.find((r) => r.region === sign)?.region_name ?? ref?.regions.find((o) => o.value === sign)?.label ?? sign;
   const ruleById = useMemo(() => new Map(rules.map((r) => [r.id, r])), [rules]);
   const hits = (snap?.rules ?? []).filter((s) => s.hit && ruleById.has(s.rule_id));
   const enabled = (snap?.rules ?? []).filter((s) => ruleById.get(s.rule_id)?.enabled);
@@ -301,9 +418,26 @@ export default function StockPage({ snap, go }: { snap: Snapshot | null; go: (p:
         <Widget enabled={enabled.map((s) => ({ s, r: ruleById.get(s.rule_id)! }))} hits={hits.length} lastRun={snap.last_run_at} />
       </div>
 
-      <div className="regions">
-        {snap.regions.map((rs) => <RegionGroup key={rs.region} rs={rs} rules={rules} />)}
-      </div>
+      {snap.regions.length > 0 && (
+        <>
+          <WatchSummary regions={snap.regions} models={models} picked={view === "model" ? focus : null}
+            onPick={(kw) => { if (view === "model" && focus === kw) setFocus(null); else { setFocus(kw); setView("model"); } }} />
+          <div className="row" style={{ justifyContent: "space-between", margin: "0 6px 18px" }}>
+            <span className="muted" style={{ fontSize: 13 }}>
+              {view === "region" ? "按区域看每种卡的空闲数" : "同一种卡在各区的空闲数和合计"}
+            </span>
+            <Segmented small layoutId="stock-view" value={view} onChange={(v) => { setView(v); if (v === "region") setFocus(null); }}
+              items={[{ id: "region", label: "按区域" }, { id: "model", label: "按卡型" }]} />
+          </div>
+        </>
+      )}
+      {view === "region" ? (
+        <div className="regions">
+          {snap.regions.map((rs) => <RegionGroup key={rs.region} rs={rs} rules={rules} />)}
+        </div>
+      ) : (
+        <ModelView regions={snap.regions} rules={rules} models={models} focus={focus} onClearFocus={() => setFocus(null)} />
+      )}
       {snap.has_web_token && snap.regions.length === 0 && (
         <div className="empty-state">{snap.running ? "正在查询库存…" : "还没有库存数据，到「设置」里选几个要看的区域。"}</div>
       )}

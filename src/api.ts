@@ -57,6 +57,8 @@ export interface Snapshot {
 export interface Settings {
   poll_interval_secs: number; regions: string[]; low_balance_yuan: number;
   long_running_hours: number; auto_min_balance_yuan: number; history_keep_days: number;
+  /** 关注的卡型关键字，库存页顶部显示合计 */
+  watch_models: string[];
 }
 export type RuleAction = "notify" | "create" | "power_on";
 export interface Rule {

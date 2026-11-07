@@ -110,6 +110,14 @@ export default function SettingsPage({ hasToken, hasWebToken, webTokenExp }: { h
             </Group>
             <div className="group-foot">提醒规则用到的区域会自动查询，不必在这里勾选。</div>
 
+            <div className="group-label">关注卡型</div>
+            <Group>
+              <FormRow icon="gpu_s" label="卡型关键字">
+                <ModelsInput value={s.watch_models ?? []} onChange={(v) => set("watch_models", v)} />
+              </FormRow>
+            </Group>
+            <div className="group-foot">库存页顶部显示这些卡型在上面勾选的区域里一共有几张空闲。用逗号或空格分开，不区分大小写，「A100」会同时算上 A100 40G 和 80G。</div>
+
             <div className="group-label">监控</div>
             <Group>
               <FormRow icon="timer" label="查询间隔"><Stepper value={s.poll_interval_secs} min={30} max={600} step={30} unit="秒" onChange={(v) => set("poll_interval_secs", v)} /></FormRow>
@@ -144,4 +152,13 @@ export default function SettingsPage({ hasToken, hasWebToken, webTokenExp }: { h
       </div>
     </Page>
   );
+}
+
+/** 关键字输入：编辑时保留原文，失焦时再拆成列表，避免打逗号时被吞掉 */
+function ModelsInput({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const [text, setText] = useState(value.join(", "));
+  useEffect(() => { setText(value.join(", ")); }, [value.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
+  const commit = () => onChange([...new Set(text.split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean))]);
+  return <input className="inline-input" value={text} placeholder="如 A100, V100, A800" onChange={(e) => setText(e.target.value)} onBlur={commit}
+    onKeyDown={(e) => { if (e.key === "Enter") commit(); }} />;
 }

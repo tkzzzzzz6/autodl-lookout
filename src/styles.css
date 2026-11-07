@@ -304,3 +304,15 @@ textarea.field-input { height: auto; padding: 10px 14px; resize: vertical; }
 
 /* 服务器页：AutoDL 实例和自己的服务器两列 */
 .servers-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 0 24px; align-items: start; }
+
+/* 库存页顶部：关注卡型的合计 */
+.watch-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin: 6px 0 22px; }
+.watch-card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 14px 16px; border-radius: 16px; text-align: left; cursor: pointer; color: var(--ink); font: inherit; }
+.watch-card.picked { box-shadow: 0 0 0 2px var(--blue), var(--shadow); }
+.watch-card:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--blue-glow), var(--shadow); }
+.wc-head { display: inline-flex; align-items: center; gap: 6px; color: var(--blue); font-size: 13px; }
+.wc-head b { color: var(--ink); font-weight: 650; }
+.wc-num { font-size: 26px; font-weight: 650; line-height: 1.1; }
+.wc-num .zero { color: var(--faint); }
+.wc-num small { font-size: 12px; font-weight: 400; color: var(--muted); }
+.wc-where { font-size: 12px; line-height: 1.5; }

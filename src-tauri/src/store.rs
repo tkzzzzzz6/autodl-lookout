@@ -16,17 +16,25 @@ pub struct Settings {
     /// 余额低于此值时，自动抢卡动作不会执行
     pub auto_min_balance_yuan: f64,
     pub history_keep_days: i64,
+    /// 关注的卡型关键字：库存页顶部显示它们在看板区域里的合计（子串匹配，不区分大小写，和规则一致）
+    pub watch_models: Vec<String>,
 }
+
+/// 默认看板区域：V100专区、A800专区、佛山区、北京B区
+pub const DEFAULT_REGIONS: [&str; 4] = ["beijingDC3", "neimengDC2", "foshanDC1", "beijingDC2"];
+/// 旧版本的默认看板区域。没改过它的老用户升级时换成新默认（见 Store::migrate_default_regions）
+const OLD_DEFAULT_REGIONS: [&str; 2] = ["westDC3", "beijingDC2"];
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             poll_interval_secs: 60,
-            regions: vec!["westDC3".into(), "beijingDC2".into()],
+            regions: DEFAULT_REGIONS.iter().map(|s| s.to_string()).collect(),
             low_balance_yuan: 20.0,
             long_running_hours: 8.0,
             auto_min_balance_yuan: 10.0,
             history_keep_days: 14,
+            watch_models: vec!["A100".into(), "V100".into(), "A800".into()],
         }
     }
 }
@@ -149,6 +157,7 @@ impl Store {
         migrate(&conn)?;
         let s = Self { conn: Mutex::new(conn) };
         s.seed_defaults()?;
+        s.migrate_default_regions()?;
         Ok(s)
     }
 
@@ -204,6 +213,21 @@ impl Store {
         c.execute("INSERT INTO kv(k,v) VALUES(?1,?2) ON CONFLICT(k) DO UPDATE SET v=excluded.v", [k, v])
             .map_err(e)?;
         Ok(())
+    }
+
+    /// 看板区域还是旧默认值（西北B区、北京B区，没改过）的老用户，换成新默认；改过的不动。只做一次
+    fn migrate_default_regions(&self) -> R<()> {
+        if self.kv_get("regions_default_v2")?.is_some() {
+            return Ok(());
+        }
+        if self.kv_get("settings")?.is_some() {
+            let mut st = self.settings();
+            if st.regions == OLD_DEFAULT_REGIONS {
+                st.regions = DEFAULT_REGIONS.iter().map(|s| s.to_string()).collect();
+                self.save_settings(&st)?;
+            }
+        }
+        self.kv_set("regions_default_v2", "1")
     }
 
     pub fn settings(&self) -> Settings {
@@ -546,6 +570,37 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_regions_and_watch_models() {
+        let s = Store::open_in_memory().unwrap();
+        let st = s.settings();
+        assert_eq!(st.regions, vec!["beijingDC3", "neimengDC2", "foshanDC1", "beijingDC2"]);
+        assert_eq!(st.watch_models, vec!["A100", "V100", "A800"]);
+        // 老版本存下的设置里没有 watch_models：读出来用默认值
+        s.kv_set("settings", r#"{"poll_interval_secs":60,"regions":["westDC3"]}"#).unwrap();
+        assert_eq!(s.settings().watch_models, vec!["A100", "V100", "A800"]);
+    }
+
+    #[test]
+    fn migrates_untouched_old_default_regions_once() {
+        let s = Store::open_in_memory().unwrap();
+        // 模拟老用户：存着没改过的旧默认，还没迁移过
+        s.conn.lock().unwrap().execute("DELETE FROM kv WHERE k='regions_default_v2'", []).unwrap();
+        s.kv_set("settings", r#"{"regions":["westDC3","beijingDC2"]}"#).unwrap();
+        s.migrate_default_regions().unwrap();
+        assert_eq!(s.settings().regions, vec!["beijingDC3", "neimengDC2", "foshanDC1", "beijingDC2"]);
+        // 只做一次：之后用户自己改回旧默认也不会再被改
+        s.save_settings(&Settings { regions: vec!["westDC3".into(), "beijingDC2".into()], ..Default::default() }).unwrap();
+        s.migrate_default_regions().unwrap();
+        assert_eq!(s.settings().regions, vec!["westDC3", "beijingDC2"]);
+        // 改过的不动
+        let s2 = Store::open_in_memory().unwrap();
+        s2.conn.lock().unwrap().execute("DELETE FROM kv WHERE k='regions_default_v2'", []).unwrap();
+        s2.kv_set("settings", r#"{"regions":["chongqingDC1"]}"#).unwrap();
+        s2.migrate_default_regions().unwrap();
+        assert_eq!(s2.settings().regions, vec!["chongqingDC1"]);
+    }
 
     #[test]
     fn server_crud() {
