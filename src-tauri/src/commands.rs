@@ -465,10 +465,17 @@ pub fn save_server(st: State<'_, AppState>, server: Server, password: Option<Str
     sv.host = sv.host.trim().to_string();
     sv.user = sv.user.trim().to_string();
     validate_server(&sv)?;
+    let is_new = sv.id <= 0;
     let id = st.store.save_server(sv.clone())?;
     match (sv.auth.as_str(), password.filter(|p| !p.is_empty())) {
         ("password", Some(pw)) => {
-            crate::secret::save_server_password(&st.store, id, &pw)?;
+            if let Err(e) = crate::secret::save_server_password(&st.store, id, &pw) {
+                // 新加的服务器存不了密码就整个不保存，免得留下一台登录不了的
+                if is_new {
+                    let _ = st.store.delete_server(id);
+                }
+                return Err(e);
+            }
         }
         ("key", _) => crate::secret::clear_server_password(&st.store, id),
         _ => {}
@@ -545,15 +552,27 @@ pub async fn open_terminal(st: State<'_, AppState>, id: String) -> R<()> {
     crate::terminal::open(&v.name, &args)
 }
 
-/// VS Code Remote-SSH 要用 SSH 配置里的 Host 名，没同步过就提示先同步
+/// VS Code Remote-SSH 的链接，要用 SSH 配置里的 Host 名
+pub fn vscode_uri(alias: &str, user: &str) -> R<String> {
+    if !sshconfig::valid_alias(alias) || !sshconfig::valid_user(user) {
+        return Err("SSH 别名或用户名含有不支持的字符".into());
+    }
+    let dir = if user == "root" { "/root".to_string() } else { format!("/home/{user}") };
+    Ok(format!("vscode://vscode-remote/ssh-remote+{alias}{dir}?windowId=_blank"))
+}
+
+/// 用 VS Code 打开。vscode:// 不是 http 链接，前端的 openExternal / opener 插件的默认权限都不放行，
+/// 所以在后端用系统默认方式打开；没同步过别名就提示先同步
 #[tauri::command]
-pub async fn vscode_url(st: State<'_, AppState>, id: String) -> R<String> {
+pub async fn open_vscode(app: tauri::AppHandle, st: State<'_, AppState>, id: String) -> R<()> {
+    use tauri_plugin_opener::OpenerExt;
     let v = find_server(&st, &id).await?;
     if !v.alias_ready {
         return Err("NEED_SYNC|VS Code 要通过 SSH 配置里的名字连接，先点「同步到 SSH 配置」".into());
     }
-    let dir = if v.user == "root" { "/root".to_string() } else { format!("/home/{}", v.user) };
-    Ok(format!("vscode://vscode-remote/ssh-remote+{}{dir}?windowId=_blank", v.alias))
+    let uri = vscode_uri(&v.alias, &v.user)?;
+    app.opener().open_url(uri, None::<&str>)
+        .map_err(|e| format!("打不开 VS Code（{e}）。确认装了 VS Code 和 Remote - SSH 扩展"))
 }
 
 /// 复制密码用：用户点了才取，不写日志
@@ -608,4 +627,17 @@ pub async fn trust_host_key(st: State<'_, AppState>, id: String) -> R<()> {
     st.store.kv_set(&crate::ssh::hostkey_kv(&v.host, v.port as u16), "")?;
     let _ = st.store.log(now(), "warn", "server", None, &format!("信任了 {}:{} 的新主机密钥", v.host, v.port));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vscode_uri_uses_alias_and_home() {
+        assert_eq!(vscode_uri("autodl-qwen-a1b2c3", "root").unwrap(), "vscode://vscode-remote/ssh-remote+autodl-qwen-a1b2c3/root?windowId=_blank");
+        assert_eq!(vscode_uri("lab", "tk").unwrap(), "vscode://vscode-remote/ssh-remote+lab/home/tk?windowId=_blank");
+        assert!(vscode_uri("a b", "root").is_err());
+        assert!(vscode_uri("lab", "x/../y").is_err());
+    }
 }

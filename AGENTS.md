@@ -83,7 +83,7 @@ src-tauri/src/
   terminal.rs   打开系统终端执行 ssh（Windows Terminal / cmd、macOS 终端、Linux 终端）
   heatmap.rs    抢卡时段：库存历史按「星期 × 小时」聚合、一句话结论
   store.rs      SQLite：设置、规则、模板、库存历史、日志
-  secret.rs     凭证存系统钥匙串（Windows 凭据管理器 / macOS Keychain），不可用时退回数据库
+  secret.rs     凭证存系统钥匙串（Windows 凭据管理器 / macOS Keychain），不可用时网页凭证 / 开发者 Token 退回数据库，服务器密码不退回（直接报错）
   regions.rs    区域、Pro 规格、公共镜像对照表
   commands.rs   暴露给前端的 Tauri 命令
   tray.rs       托盘图标和菜单

@@ -94,7 +94,7 @@ pub fn run() {
             commands::sync_ssh_config,
             commands::set_ssh_auto_sync,
             commands::open_terminal,
-            commands::vscode_url,
+            commands::open_vscode,
             commands::server_password,
             commands::test_server,
             commands::ensure_ssh_key,

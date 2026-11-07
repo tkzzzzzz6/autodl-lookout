@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { HOSTKEY_CHANGED, call, openExternal, type HostEntry, type Probe, type ServerList, type ServerRecord, type ServerView } from "../api";
+import { HOSTKEY_CHANGED, call, type HostEntry, type Probe, type ServerList, type ServerRecord, type ServerView } from "../api";
 import { Icon } from "../icons";
 import { Btn, ConfirmButton, FormRow, Group, Page, Row, Segmented, Sheet, Stepper, Switch, copy, softSpring, stagger, useAction, useToast } from "../ui";
 
@@ -39,7 +39,8 @@ function Detail({ v, list, onChanged, onEdit }: { v: ServerView; list: ServerLis
     if (ok !== undefined) toast(v.has_password && !v.key_pushed ? "已打开终端，密码已复制，提示输入时粘贴即可" : "已打开终端");
   };
   const vscode = async () => {
-    try { openExternal(await call<string>("vscode_url", { id: v.id })); }
+    // vscode:// 链接由后端打开（前端 opener 只放行 http 链接）
+    try { await call("open_vscode", { id: v.id }); toast("已让 VS Code 打开这台服务器"); }
     catch (e) {
       const s = errText(e);
       toast(s.startsWith("NEED_SYNC|") ? s.slice(10) : s, true);

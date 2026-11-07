@@ -184,8 +184,17 @@ pub fn config_path() -> Option<PathBuf> {
 
 /// 写回 ~/.ssh/config：内容没变就不写；变了先备份成 config.autodl-lookout.bak
 pub fn write_block(entries: &[HostEntry]) -> Result<bool, String> {
-    let path = config_path().ok_or("找不到用户目录")?;
-    let old = std::fs::read_to_string(&path).unwrap_or_default();
+    write_block_at(&config_path().ok_or("找不到用户目录")?, entries)
+}
+
+/// 只有文件不存在时才当成空文件；其他读取错误（比如不是 UTF-8 编码）一律中止，绝不覆盖用户的配置
+pub fn write_block_at(path: &std::path::Path, entries: &[HostEntry]) -> Result<bool, String> {
+    let path = path.to_path_buf();
+    let old = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("读不了 SSH 配置 {}（{e}，可能不是 UTF-8 编码）。为了不覆盖你的配置，这次没有同步", path.display())),
+    };
     let new = replace_block(&old, &render_block(entries));
     if new == old {
         return Ok(false);
@@ -258,6 +267,31 @@ Host gh
         assert_eq!(names, vec!["lab", "lab-alias", "cloud", "gh"], "跳过通配符和软件管理的段");
         assert_eq!(hs[0], HostEntry { alias: "lab".into(), host: "10.0.0.8".into(), port: 2222, user: "tk".into(), identity_file: Some("~/.ssh/id_lab".into()) });
         assert_eq!((hs[2].host.as_str(), hs[2].user.as_str(), hs[2].port), ("47.1.2.3", "ubuntu", 22));
+    }
+
+    #[test]
+    fn write_block_never_clobbers_unreadable_config() {
+        let dir = std::env::temp_dir().join(format!("lookout-sshcfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let entry = [HostEntry { alias: "autodl-x".into(), host: "h.example".into(), port: 2, user: "root".into(), identity_file: None }];
+        // 不是 UTF-8 的配置（比如 GBK 注释）：报错，文件原样不动，也不生成备份
+        let bad = dir.join("config-gbk");
+        let gbk: &[u8] = b"# \xd6\xd0\xce\xc4\nHost lab\n  HostName 10.0.0.8\n";
+        std::fs::write(&bad, gbk).unwrap();
+        assert!(write_block_at(&bad, &entry).unwrap_err().contains("没有同步"));
+        assert_eq!(std::fs::read(&bad).unwrap(), gbk);
+        assert!(!bad.with_file_name("config.autodl-lookout.bak").exists());
+        // 文件不存在：新建
+        let fresh = dir.join("sub").join("config");
+        assert!(write_block_at(&fresh, &entry).unwrap());
+        assert!(std::fs::read_to_string(&fresh).unwrap().contains("Host autodl-x"));
+        // 已有内容：先备份再写；再同步一次不变
+        let ok = dir.join("config");
+        std::fs::write(&ok, "Host gh\n  User git\n").unwrap();
+        assert!(write_block_at(&ok, &entry).unwrap());
+        assert_eq!(std::fs::read_to_string(dir.join("config.autodl-lookout.bak")).unwrap(), "Host gh\n  User git\n");
+        assert!(!write_block_at(&ok, &entry).unwrap());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
