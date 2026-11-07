@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AutoDL Lookout",
   "version": "0.1.0",
-  "identifier": "dev.local.autodl-lookout",
+  "identifier": "io.github.tkzzzzzz6.autodl-lookout",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -27,12 +27,28 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "tkzzzzzz6",
+    "copyright": "Copyright © 2026 tkzzzzzz6. MIT License.",
+    "category": "DeveloperTool",
+    "shortDescription": "显卡管家：盯 AutoDL 空闲显卡、管理实例和 GPU 服务器",
+    "longDescription": "AutoDL Lookout（显卡管家）盯着 AutoDL 各区域的空闲显卡，有卡时推送系统通知；还能管理普通实例、容器实例 Pro 和自己的 GPU 服务器。",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "languages": [
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": false
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
   }
 }

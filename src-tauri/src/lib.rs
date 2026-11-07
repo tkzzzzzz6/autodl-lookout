@@ -136,25 +136,40 @@ pub fn run() {
         });
 }
 
-/// 改名前的数据在 …/dev.local.autodl-manager/autodl-manager.sqlite3，新库不存在时复制过来（旧文件保留不动）
+/// 旧版本的数据库位置，按新到旧排：
+/// - 应用标识改成正式的 io.github.tkzzzzzz6.autodl-lookout 之前：…/dev.local.autodl-lookout/autodl-lookout.sqlite3
+/// - 改名（autodl-manager → autodl-lookout）之前：…/dev.local.autodl-manager/autodl-manager.sqlite3
+const LEGACY_DBS: [(&str, &str); 2] = [
+    ("dev.local.autodl-lookout", "autodl-lookout.sqlite3"),
+    ("dev.local.autodl-manager", "autodl-manager.sqlite3"),
+];
+
+/// 新库不存在时，把最近一个旧位置的数据库（连同 -wal / -shm）复制过来；旧文件保留不动
 fn migrate_legacy_db(dir: &std::path::Path, db: &std::path::Path) {
     if db.exists() {
         return;
     }
     let Some(parent) = dir.parent() else { return };
-    let old_dir = parent.join("dev.local.autodl-manager");
-    let old_db = old_dir.join("autodl-manager.sqlite3");
-    if !old_db.exists() {
-        return;
-    }
-    if std::fs::copy(&old_db, db).is_ok() {
-        for ext in ["-wal", "-shm"] {
-            let src = old_dir.join(format!("autodl-manager.sqlite3{ext}"));
-            if src.exists() {
-                let _ = std::fs::copy(&src, dir.join(format!("autodl-lookout.sqlite3{ext}")));
-            }
+    let new_name = db.file_name().and_then(|n| n.to_str()).unwrap_or("autodl-lookout.sqlite3");
+    for (old_dir_name, old_name) in LEGACY_DBS {
+        let old_dir = parent.join(old_dir_name);
+        if old_dir == dir {
+            continue;
         }
-        log::info!("migrated data from {}", old_db.display());
+        let old_db = old_dir.join(old_name);
+        if !old_db.exists() {
+            continue;
+        }
+        if std::fs::copy(&old_db, db).is_ok() {
+            for ext in ["-wal", "-shm"] {
+                let src = old_dir.join(format!("{old_name}{ext}"));
+                if src.exists() {
+                    let _ = std::fs::copy(&src, dir.join(format!("{new_name}{ext}")));
+                }
+            }
+            log::info!("migrated data from {}", old_db.display());
+        }
+        return;
     }
 }
 
@@ -184,6 +199,26 @@ mod tests {
         std::fs::write(&db, b"new-db").unwrap();
         migrate_legacy_db(&new, &db);
         assert_eq!(std::fs::read(&db).unwrap(), b"new-db");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn prefers_the_newest_legacy_location() {
+        let root = std::env::temp_dir().join(format!("lookout-mig2-{}", std::process::id()));
+        let oldest = root.join("dev.local.autodl-manager");
+        let dev = root.join("dev.local.autodl-lookout");
+        let new = root.join("io.github.tkzzzzzz6.autodl-lookout");
+        for d in [&oldest, &dev, &new] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(oldest.join("autodl-manager.sqlite3"), b"oldest").unwrap();
+        std::fs::write(dev.join("autodl-lookout.sqlite3"), b"dev").unwrap();
+        std::fs::write(dev.join("autodl-lookout.sqlite3-shm"), b"shm").unwrap();
+        let db = new.join("autodl-lookout.sqlite3");
+        migrate_legacy_db(&new, &db);
+        assert_eq!(std::fs::read(&db).unwrap(), b"dev");
+        assert_eq!(std::fs::read(new.join("autodl-lookout.sqlite3-shm")).unwrap(), b"shm");
+        assert!(dev.join("autodl-lookout.sqlite3").exists(), "legacy file is kept");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

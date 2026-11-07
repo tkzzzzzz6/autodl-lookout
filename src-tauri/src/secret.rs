@@ -5,6 +5,8 @@
 
 use crate::store::Store;
 
+/// 钥匙串服务名。应用标识后来改成了 io.github.tkzzzzzz6.autodl-lookout，但这里故意不跟着改：
+/// 它只是钥匙串里的分组名，改了就要再迁移一遍凭证
 const SERVICE: &str = "dev.local.autodl-lookout";
 /// 改名前（autodl-manager）用的钥匙串服务名，首次启动时把凭证搬过来
 const LEGACY_SERVICE: &str = "dev.local.autodl-manager";
