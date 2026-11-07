@@ -11,8 +11,9 @@ import TemplatesPage from "./pages/Templates";
 import LogsPage from "./pages/Logs";
 import AnalysisPage from "./pages/Analysis";
 import SettingsPage from "./pages/Settings";
+import ServersPage from "./pages/Servers";
 
-export type PageId = "stock" | "rules" | "analysis" | "instances" | "templates" | "logs" | "settings";
+export type PageId = "stock" | "rules" | "analysis" | "instances" | "servers" | "templates" | "logs" | "settings";
 
 function useNow() {
   const [n, setN] = useState(() => Math.floor(Date.now() / 1000));
@@ -56,6 +57,7 @@ export default function App() {
     { id: "rules", label: "提醒规则", badge: hits },
     { id: "analysis", label: "抢卡时段" },
     { id: "instances", label: "我的实例" },
+    { id: "servers", label: "服务器" },
     { id: "templates", label: "创建模板" },
     { id: "logs", label: "日志" },
     { id: "settings", label: "设置" },
@@ -95,6 +97,7 @@ export default function App() {
           <AnimatePresence mode="wait">
             {page === "stock" && <StockPage key="stock" snap={snap} go={setPage} />}
             {page === "rules" && <RulesPage key="rules" snap={snap} />}
+            {page === "servers" && <ServersPage key="servers" />}
             {page === "instances" && <InstancesPage key="instances" hasToken={!!snap?.has_token} hasWebToken={!!snap?.has_web_token} go={setPage} />}
             {page === "templates" && <TemplatesPage key="templates" hasToken={!!snap?.has_token} />}
             {page === "analysis" && <AnalysisPage key="analysis" />}

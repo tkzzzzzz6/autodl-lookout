@@ -77,6 +77,10 @@ src-tauri/src/
   market.rs     算力市场库存、余额、普通容器实例（网页登录凭证，控制台内部接口）
   monitor.rs    后台轮询：库存 → 历史 → 规则 → 通知 / 自动动作；余额、运行时长、凭证过期提醒
   price.rs      点开卡型时的实时价格：汇总分档，缓存 + 合并请求 + 全局限流
+  servers.rs    服务器页：AutoDL 实例 + 自己的服务器的统一视图、SSH 别名、要写进 SSH 配置的条目
+  ssh.rs        SSH 连接池（russh）：认证、执行命令、主机密钥记忆、软件密钥生成和推送
+  sshconfig.rs  ~/.ssh/config 解析、软件管理段的读写、主机名 / 用户名校验
+  terminal.rs   打开系统终端执行 ssh（Windows Terminal / cmd、macOS 终端、Linux 终端）
   heatmap.rs    抢卡时段：库存历史按「星期 × 小时」聚合、一句话结论
   store.rs      SQLite：设置、规则、模板、库存历史、日志
   secret.rs     凭证存系统钥匙串（Windows 凭据管理器 / macOS Keychain），不可用时退回数据库
@@ -91,7 +95,7 @@ src/
   api.ts        前端调用封装、类型、外部链接、卡型别名
   hooks.ts      useGpuPrice（实时价格）等数据 hook
   mock.ts       浏览器预览用假数据
-  pages/        库存、提醒规则、抢卡时段、我的实例、创建模板、日志、设置
+  pages/        库存、提醒规则、抢卡时段、我的实例、服务器、创建模板、日志、设置
   styles.css    设计令牌和样式（仅浅色）
 design/         设计稿 SVG（B2 风格）和应用图标源文件
 ```
@@ -131,6 +135,7 @@ design/         设计稿 SVG（B2 风格）和应用图标源文件
 - 网页登录凭证等同于用户的登录状态，权限比开发者 Token 大，只能存在 `secret.rs` 的钥匙串里。
 - 自动创建 / 开机会扣费。保留这些安全阀：每条规则每天次数上限（失败也计数）、执行前查余额并和「开机余额下限」（设置项 `auto_min_balance_yuan`）比较、查不到余额就不执行、默认只提醒。新增任何会产生费用的动作，包括手动操作，都要有同等的后端把关并写日志，界面上的二次确认不能代替。
 - 释放实例等不可逆操作在界面上用 `ConfirmButton`（点两次）。
+- SSH：服务器密码只存钥匙串（`secret::save_server_password`）；拼进终端命令的主机名、用户名、别名必须先过 `sshconfig::valid_*`；主机密钥变了不能自动接受，要用户在界面上确认；改 `~/.ssh/config` 只能动软件管理的那一段（`sshconfig::replace_block`），写前备份。
 
 ## 界面约定
 

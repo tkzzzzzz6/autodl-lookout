@@ -301,3 +301,6 @@ textarea.field-input { height: auto; padding: 10px 14px; resize: vertical; }
 .multi .capsule { font-size: 12px; gap: 6px; }
 .multi .capsule b { color: var(--blue); font-weight: 650; }
 .multi .capsule.dim { opacity: .5; }
+
+/* 服务器页：AutoDL 实例和自己的服务器两列 */
+.servers-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 0 24px; align-items: start; }
