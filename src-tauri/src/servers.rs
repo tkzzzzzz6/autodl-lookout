@@ -122,6 +122,40 @@ pub fn target(v: &ServerView, password: Option<String>) -> Target {
     Target { host: v.host.clone(), port: v.port as u16, user: v.user.clone(), keys, password }
 }
 
+/// 服务器的密码：AutoDL 实例用网页凭证单独取（不进列表、不写日志），自己的服务器从钥匙串读
+pub async fn password(store: &Store, market: Option<&crate::market::MarketClient>, v: &ServerView) -> Result<Option<String>, String> {
+    if let Some(uuid) = v.id.strip_prefix("autodl:") {
+        if !v.has_password {
+            return Ok(None);
+        }
+        let m = market.ok_or("还没有填写网页登录凭证，取不到 AutoDL 实例的密码")?;
+        return m.instance_password(uuid).await.map(Some).map_err(|e| e.to_string());
+    }
+    let id: i64 = v.id.trim_start_matches("srv:").parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
+    Ok(crate::secret::load_server_password(store, id))
+}
+
+/// 在服务器上执行命令：推过公钥或用私钥的先只用密钥，失败（比如实例重建过）再带上密码重试；
+/// 主机密钥变化的错误直接返回，不会退回密码
+pub async fn exec(store: &Store, pool: &crate::ssh::SshPool, market: Option<&crate::market::MarketClient>, v: &ServerView, cmd: &str)
+    -> Result<crate::ssh::ExecOut, String> {
+    if v.host.is_empty() {
+        return Err("这台实例还没有 SSH 信息（可能还没开机）".into());
+    }
+    if v.key_pushed || v.auth == "key" {
+        match pool.exec(&target(v, None), cmd).await {
+            Ok(o) => return Ok(o),
+            Err(e) if e.starts_with(crate::ssh::HOSTKEY_CHANGED) => return Err(e),
+            Err(e) if v.auth == "key" && !v.has_password => return Err(e),
+            Err(_) => {}
+        }
+    }
+    let pw = password(store, market, v).await?;
+    let t = target(v, pw);
+    pool.forget(&t).await;
+    pool.exec(&t, cmd).await
+}
+
 /// 配置里常见的 `~/.ssh/id_xxx`
 pub fn expand_home(p: &str) -> std::path::PathBuf {
     if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\")) {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
+import { usePolled, useNowSec } from "../hooks";
 import { AnimatePresence, motion } from "motion/react";
-import { HOSTKEY_CHANGED, call, openExternal, type HostEntry, type Probe, type ServerList, type ServerRecord, type ServerView } from "../api";
+import { HOSTKEY_CHANGED, call, openExternal, type HostEntry, type Probe, type ServerList, type ServerRecord, type ServerStatus, type ServerView, type Watch } from "../api";
 import { Icon } from "../icons";
 import { Btn, ConfirmButton, FormRow, Group, Page, Row, Segmented, Sheet, Stepper, Switch, copy, softSpring, stagger, useAction, useToast } from "../ui";
 
@@ -10,6 +11,137 @@ const STATUS: Record<string, [string, string]> = {
 
 const sshCmd = (v: ServerView) => (v.alias_ready ? `ssh ${v.alias}` : `ssh -p ${v.port} ${v.user}@${v.host}`);
 const errText = (e: unknown) => String(e);
+
+/* ---------------- 状态 ---------------- */
+const gb = (b: number) => (b >= 1e12 ? `${(b / 1e12).toFixed(1)} TB` : `${(b / 1e9).toFixed(b >= 1e10 ? 0 : 1)} GB`);
+const dur = (s: number | null) => (s == null ? "—" : s >= 86400 ? `${Math.floor(s / 86400)} 天 ${Math.floor((s % 86400) / 3600)} 小时` : s >= 3600 ? `${Math.floor(s / 3600)} 小时 ${Math.floor((s % 3600) / 60)} 分` : `${Math.floor(s / 60)} 分钟`);
+
+function Meter({ ratio, warn }: { ratio: number; warn?: boolean }) {
+  return (
+    <span className={`meter ${warn ? "warn" : ""}`}>
+      <motion.i initial={{ width: 0 }} animate={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} transition={softSpring} />
+    </span>
+  );
+}
+
+function StatusPanel({ v, onChanged }: { v: ServerView; onChanged: () => void }) {
+  const { data, err, loading, refresh } = usePolled<ServerStatus>(v.id, () => call<ServerStatus>("server_status", { id: v.id }), true);
+  const now = useNowSec();
+  const { busy, run } = useAction();
+  const idle = !!data && v.kind === "autodl" && data.gpus.length > 0 && data.gpus.every((g) => g.util < 5);
+  return (
+    <>
+      <div className="group-label row" style={{ justifyContent: "space-between" }}>
+        <span>状态{data ? `（${Math.max(0, now - data.fetched_at)} 秒前）` : ""}</span>
+        <Btn small icon="refresh" spinning={loading} onClick={refresh}>刷新</Btn>
+      </div>
+      {err && !data && <Group><div className="group-row err-text">{err.startsWith(HOSTKEY_CHANGED) ? "主机密钥变了，点上面的「测试连接」处理后再看状态。" : err}</div></Group>}
+      {!data && !err && <Group><div className="empty-state">正在连接服务器…</div></Group>}
+      {data && (
+        <>
+          {idle && (
+            <Group className="idle-banner">
+              <div className="group-row" style={{ gap: 12 }}>
+                <Icon name="yen" size={20} stroke={2} />
+                <span className="grow">显卡几乎没在用，但实例还在计费。不用的话可以关机（数据会保留）。</span>
+                <ConfirmButton icon="stop" className="btn" label="关机" confirmLabel="再点一次关机" disabled={busy}
+                  onConfirm={async () => { const r = await run(() => call("regular_power_off", { uuid: v.id.slice(7) }), "已发送关机请求"); if (r !== undefined) setTimeout(onChanged, 1500); }} />
+              </div>
+            </Group>
+          )}
+          <Group>
+            {!data.nvidia && <div className="group-row muted">这台服务器上没有 nvidia-smi（没有 NVIDIA 显卡，或者是无卡模式开机）。</div>}
+            {data.gpus.map((g) => (
+              <div key={g.index} className="gpu-line">
+                <span className="num gpu-idx">#{g.index}</span>
+                <span className="gpu-name">
+                  <span title={g.name}>{g.name.replace(/^NVIDIA (GeForce )?/, "")}</span>
+                  <small className="num muted">
+                    显存 {(g.mem_used_mb / 1024).toFixed(1)} / {(g.mem_total_mb / 1024).toFixed(0)} GB
+                    {g.temp != null ? ` · ${g.temp.toFixed(0)}°C` : ""}{g.power_w != null ? ` · ${g.power_w.toFixed(0)}W` : ""}
+                  </small>
+                </span>
+                <Meter ratio={g.util / 100} />
+                <span className="num gpu-util">{g.util.toFixed(0)}%</span>
+              </div>
+            ))}
+          </Group>
+          {data.procs.length > 0 && (
+            <>
+              <div className="group-label">占用显卡的进程</div>
+              <Group>
+                {data.procs.map((p) => (
+                  <div key={`${p.gpu}-${p.pid}`} className="proc-line">
+                    <div className="row" style={{ gap: 10, flexWrap: "nowrap" }}>
+                      <span className="num muted">#{p.gpu >= 0 ? p.gpu : "?"}</span>
+                      <b className="proc-user">{p.user ?? "—"}</b>
+                      <span className="num">{(p.mem_mb / 1024).toFixed(1)} GB</span>
+                      <span className="num muted">{p.elapsed_secs != null ? `跑了 ${dur(p.elapsed_secs)}` : ""}</span>
+                      <span style={{ flex: 1 }} />
+                      <span className="num muted">PID {p.pid}</span>
+                    </div>
+                    <div className="proc-cmd kv-code" title={p.cmd ?? ""}>{p.cmd ?? "看不到进程详情（容器里常见）"}</div>
+                  </div>
+                ))}
+              </Group>
+            </>
+          )}
+          <div className="group-label">系统</div>
+          <Group>
+            {data.load1 != null && (
+              <div className="sys-line"><span>CPU 负载</span><Meter ratio={data.cores ? data.load1 / data.cores : 0} /><span className="num">{data.load1.toFixed(1)} / {data.cores ?? "?"} 核</span></div>
+            )}
+            {data.mem_total != null && data.mem_avail != null && (
+              <div className="sys-line"><span>内存</span><Meter ratio={1 - data.mem_avail / data.mem_total} />
+                <span className="num">{gb(data.mem_total - data.mem_avail)} / {gb(data.mem_total)}</span></div>
+            )}
+            {data.disks.map((d) => (
+              <div key={d.mount} className="sys-line"><span className="kv-code">{d.mount}</span><Meter ratio={d.used / d.total} warn={d.used / d.total >= 0.9} />
+                <span className="num">{gb(d.used)} / {gb(d.total)}</span></div>
+            ))}
+          </Group>
+        </>
+      )}
+    </>
+  );
+}
+
+/* ---------------- 提醒设置 ---------------- */
+function WatchEditor({ v }: { v: ServerView }) {
+  const [w, setW] = useState<Watch | null>(null);
+  const [pid, setPid] = useState("");
+  const { busy, run } = useAction();
+  useEffect(() => { call<Watch>("get_server_watch", { id: v.id }).then((x) => { setW(x); setPid(x.job_pid ? String(x.job_pid) : ""); }); }, [v.id]);
+  if (!w) return null;
+  const set = <K extends keyof Watch>(k: K, val: Watch[K]) => setW((x) => (x ? { ...x, [k]: val } : x));
+  const save = () => run(() => call("save_server_watch", { watch: { ...w, job_pid: pid.trim() ? Number(pid) : null } }), "提醒设置已保存");
+  return (
+    <>
+      <div className="group-label">提醒</div>
+      <Group>
+        {v.kind === "autodl" && (
+          <>
+            <Row icon="yen" label="显卡空闲提醒" sub="GPU 利用率一直低于 5% 时提醒关机，不会自动关机"
+              right={<Switch label="显卡空闲提醒" checked={w.idle} onChange={(on) => set("idle", on)} />} />
+            {w.idle && <FormRow icon="timer" label="空闲多久后提醒"><Stepper value={w.idle_minutes} min={5} max={240} step={5} unit=" 分钟" onChange={(n) => set("idle_minutes", n)} /></FormRow>}
+          </>
+        )}
+        <Row icon="box" label="磁盘告警" sub="任一磁盘用到 90% 时提醒" right={<Switch label="磁盘告警" checked={w.disk} onChange={(on) => set("disk", on)} />} />
+        <FormRow icon="number" label="训练结束：盯进程">
+          <input className="inline-input" inputMode="numeric" value={pid} placeholder="PID，留空不盯" onChange={(e) => setPid(e.target.value.replace(/\D/g, ""))} />
+        </FormRow>
+        <FormRow icon="doc" label="训练结束：盯日志">
+          <input className="inline-input" value={w.job_log ?? ""} placeholder="日志路径，留空不盯" onChange={(e) => set("job_log", e.target.value || null)} />
+        </FormRow>
+        {w.job_log && <FormRow icon="timer" label="日志多久没更新算结束"><Stepper value={w.job_quiet_minutes} min={1} max={240} unit=" 分钟" onChange={(n) => set("job_quiet_minutes", n)} /></FormRow>}
+      </Group>
+      <div className="group-foot">开了提醒的服务器，软件在后台每分钟查一次（关掉窗口也会查）。进程要先被看到在运行，退出时才会提醒；同一种情况只提醒一次。</div>
+      <div className="row" style={{ justifyContent: "flex-end", marginTop: 10 }}>
+        <Btn small primary icon="check" disabled={busy} onClick={save}>保存提醒设置</Btn>
+      </div>
+    </>
+  );
+}
 
 /* ---------------- 详情 ---------------- */
 function Detail({ v, list, onChanged, onEdit }: { v: ServerView; list: ServerList; onChanged: () => void; onEdit: () => void }) {
@@ -80,6 +212,9 @@ function Detail({ v, list, onChanged, onEdit }: { v: ServerView; list: ServerLis
           </motion.div>
         )}
       </AnimatePresence>
+
+      {!noSsh && (v.kind !== "autodl" || v.status === "running") && <StatusPanel v={v} onChanged={onChanged} />}
+      {!noSsh && <WatchEditor v={v} />}
 
       <div className="group-label">连接</div>
       <Group>
