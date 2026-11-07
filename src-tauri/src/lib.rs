@@ -88,6 +88,8 @@ pub fn run() {
             commands::delete_template,
             commands::create_from_template,
             commands::gpu_prices,
+            commands::base_images,
+            commands::rent_instance,
             commands::list_servers,
             commands::save_server,
             commands::delete_server,

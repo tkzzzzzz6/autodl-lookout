@@ -177,6 +177,8 @@ pub struct Monitor {
     pw_cache: Mutex<HashMap<String, (i64, String)>>,
     /// 后台提醒读实例列表失败时的退避：(下次可以查的时间, 当前退避秒数)
     watch_list_backoff: Mutex<(i64, i64)>,
+    /// 公共基础镜像列表，1 小时内复用
+    images_cache: tokio::sync::Mutex<Option<(i64, Vec<crate::market::BaseImage>)>>,
 }
 
 /// 实例列表缓存时间：服务器页、状态面板、后台提醒在这段时间内共用一次查询
@@ -204,6 +206,7 @@ impl Monitor {
             inst_cache: tokio::sync::Mutex::new(None),
             pw_cache: Mutex::new(HashMap::new()),
             watch_list_backoff: Mutex::new((0, 0)),
+            images_cache: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -301,6 +304,25 @@ impl Monitor {
         let list = m.instances().await.map_err(|e| format!("读取 AutoDL 实例失败：{e}"))?;
         *cache = Some((now(), list.clone()));
         Ok(list)
+    }
+
+    /// 租了新实例之后让下一次查询拿最新的实例列表
+    pub async fn invalidate_instances(&self) {
+        *self.inst_cache.lock().await = None;
+    }
+
+    /// 公共基础镜像：1 小时内复用，同一时刻只查一次
+    pub async fn base_images_cached(&self) -> Result<Vec<crate::market::BaseImage>, String> {
+        let m = self.market().ok_or("还没有填写网页登录凭证")?;
+        let mut c = self.images_cache.lock().await;
+        if let Some((at, v)) = c.as_ref() {
+            if now() - at < 3600 && !v.is_empty() {
+                return Ok(v.clone());
+            }
+        }
+        let v = m.base_images().await.map_err(|e| format!("读取镜像列表失败：{e}"))?;
+        *c = Some((now(), v.clone()));
+        Ok(v)
     }
 
     /// AutoDL 实例的 root 密码：10 分钟内用内存里的，不写数据库、不写日志
