@@ -19,6 +19,25 @@ export function onSnapshot(cb: (s: Snapshot) => void): () => void {
 export interface Opt { value: string; label: string }
 export interface RefData { regions: Opt[]; pro_regions: Opt[]; gpu_specs: Opt[]; base_images: Opt[] }
 export interface StockItem { gpu_name: string; idle: number; total: number }
+/** 服务器页：AutoDL 实例（id = autodl:<uuid>）和自己的服务器（id = srv:<数据库 id>） */
+export interface ServerView {
+  id: string; kind: "autodl" | "custom"; name: string; host: string; port: number; user: string;
+  alias: string; alias_ready: boolean; auth: "key" | "password"; key_path: string | null;
+  has_password: boolean; key_pushed: boolean; status: string | null; gpu: string | null; region_name: string | null; note: string | null;
+}
+export interface ServerList {
+  servers: ServerView[]; autodl_error: string | null; own_key: string | null;
+  ssh_config_path: string | null; auto_sync: boolean; synced: boolean;
+}
+/** 存在本机的自己的服务器（save_server 的参数） */
+export interface ServerRecord {
+  id: number; name: string; host: string; port: number; user: string; auth: "key" | "password";
+  key_path: string | null; alias: string | null; note: string | null;
+}
+export interface HostEntry { alias: string; host: string; port: number; user: string; identity_file: string | null }
+export interface Probe { ms: number; system: string; via_key: boolean }
+export const HOSTKEY_CHANGED = "HOSTKEY_CHANGED:";
+
 /** 点开卡型时的实时价格（gpu_prices），单价都是每卡每小时、元 */
 export interface PriceTier { price_yuan: number; idle: number; machines: number; max_per_machine: number; max_cuda: number | null }
 export interface PriceInfo {

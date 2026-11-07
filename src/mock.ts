@@ -1,5 +1,5 @@
 // 浏览器预览用的假数据（`npm run dev` 直接在浏览器里打开时生效；在 Tauri 里不会用到）
-import type { RegularInstance, Rule, Settings, Snapshot, Template } from "./api";
+import type { RegularInstance, Rule, ServerRecord, Settings, Snapshot, Template } from "./api";
 
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -63,6 +63,14 @@ const snapshot = (): Snapshot => ({
   ],
   balance: { assets: 187.46, accumulate: 2872.54, voucher_balance: 0 }, balance_at: now() - 60,
 });
+
+let sshSynced = false;
+let autoSync = false;
+let ownKey: string | null = null;
+let myServers: ServerRecord[] = [
+  { id: 1, name: "实验室 A100", host: "10.12.0.20", port: 22, user: "tk", auth: "key", key_path: null, alias: null, note: "8 × A100 80G，组里共用" },
+  { id: 2, name: "阿里云", host: "47.100.12.9", port: 22, user: "root", auth: "password", key_path: null, alias: null, note: null },
+];
 
 let regular: RegularInstance[] = [
   { uuid: "a1b2c3d4e5-f6a7b8c9", name: "qwen-lora", status: "running", sub_status: "", gpu: "RTX 4090", gpu_amount: 2,
@@ -141,6 +149,40 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       return { gpu_name: g, fetched_at: now() - 4, machines: 9, idle: 23, min_yuan: tiers[0].price_yuan, median_yuan: tiers[0].price_yuan,
         max_yuan: tiers[2].price_yuan, tiers, multi: [{ cards: 2, machines: 6 }, { cards: 4, machines: 3 }, { cards: 8, machines: 1 }], unpriced_idle: 0 };
     },
+    list_servers: () => ({
+      servers: [
+        ...regular.map((i) => ({
+          id: `autodl:${i.uuid}`, kind: "autodl", name: i.name || `${i.gpu} 实例`, host: i.ssh_command.split("@")[1] ?? "",
+          port: Number(i.ssh_command.split(" ")[2]) || 22, user: "root", alias: `autodl-${i.name || "rtx-3090"}-${i.uuid.slice(0, 6)}`,
+          alias_ready: sshSynced, auth: "password", key_path: null, has_password: true, key_pushed: i.uuid === regular[0].uuid,
+          status: i.status, gpu: `${i.gpu} × ${i.gpu_amount}`, region_name: i.region_name, note: null,
+        })),
+        ...myServers.map((s) => ({
+          id: `srv:${s.id}`, kind: "custom", name: s.name, host: s.host, port: s.port, user: s.user,
+          alias: s.alias ?? `lookout-${s.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "") || "server"}-${s.id}`, alias_ready: !!s.alias || sshSynced,
+          auth: s.auth, key_path: s.key_path, has_password: s.auth === "password", key_pushed: s.id === 1, status: null, gpu: null, region_name: null, note: s.note,
+        })),
+      ],
+      autodl_error: null, own_key: ownKey, ssh_config_path: "C:\\Users\\you\\.ssh\\config", auto_sync: autoSync, synced: false,
+    }),
+    save_server: () => { const sv = a.server as ServerRecord; if (sv.id > 0) myServers = myServers.map((x) => (x.id === sv.id ? sv : x)); else myServers = [...myServers, { ...sv, id: myServers.length + 10 }]; return 1; },
+    delete_server: () => { myServers = myServers.filter((x) => x.id !== a.id); },
+    ssh_config_hosts: () => [
+      { alias: "lab-3090", host: "10.12.0.31", port: 22, user: "tk", identity_file: "~/.ssh/id_ed25519" },
+      { alias: "aliyun", host: "47.100.12.8", port: 22, user: "ubuntu", identity_file: null },
+    ],
+    import_ssh_hosts: () => (a.aliases as string[]).length,
+    sync_ssh_config: () => { sshSynced = true; return { changed: true, count: 4, path: "C:\\Users\\you\\.ssh\\config" }; },
+    set_ssh_auto_sync: () => { autoSync = !!a.on; },
+    open_terminal: () => {},
+    vscode_url: () => { if (!sshSynced) throw "NEED_SYNC|VS Code 要通过 SSH 配置里的名字连接，先点「同步到 SSH 配置」"; return "vscode://vscode-remote/ssh-remote+x/root"; },
+    server_password: () => "xxxxxx",
+    test_server: () => (a.id === "srv:2"
+      ? (() => { throw "HOSTKEY_CHANGED:SHA256:fake|47.100.12.9:22 的主机密钥和上次连接时不一样。AutoDL 实例换了机器或重装系统时会这样，也可能是有人冒充。确认没问题后可以信任新的密钥。"; })()
+      : { ms: 86, system: "Linux 5.15.0-105-generic x86_64 · Ubuntu 22.04.4 LTS", via_key: true }),
+    ensure_ssh_key: () => { ownKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDemoDemoDemoDemoDemoDemoDemoDemo autodl-lookout"; return ownKey; },
+    push_ssh_key: () => {},
+    trust_host_key: () => {},
     stock_history: () => Array.from({ length: 96 }, (_, i) => ({
       ts: now() - (96 - i) * 900,
       idle: Math.max(0, Math.round(6 + 6 * Math.sin(i / 9) + (i % 7) - 3)), total: 1240,

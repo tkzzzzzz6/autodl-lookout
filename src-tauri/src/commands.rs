@@ -335,3 +335,277 @@ pub async fn list_images(st: State<'_, AppState>, page_index: i64, page_size: i6
 pub fn list_logs(st: State<'_, AppState>, limit: i64) -> R<Vec<LogEntry>> {
     st.store.logs(limit)
 }
+
+// ---------- 服务器（AutoDL 实例 + 自己的 SSH 服务器） ----------
+
+use crate::servers::{self, ServerView};
+use crate::sshconfig;
+use crate::store::Server;
+
+#[derive(Serialize)]
+pub struct ServerList {
+    pub servers: Vec<ServerView>,
+    /// 读 AutoDL 实例出错（没填网页凭证、凭证过期等），自己的服务器照常显示
+    pub autodl_error: Option<String>,
+    /// 软件生成的公钥（还没生成时为空）
+    pub own_key: Option<String>,
+    pub ssh_config_path: Option<String>,
+    pub auto_sync: bool,
+    /// 这次是否自动同步改了 ~/.ssh/config
+    pub synced: bool,
+}
+
+fn config_aliases() -> Vec<String> {
+    let text = sshconfig::config_path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+    let mut v: Vec<String> = sshconfig::parse_config(&text).into_iter().map(|h| h.alias).collect();
+    // 管理段里的条目 parse_config 会跳过，单独找
+    v.extend(text.lines().filter_map(|l| l.trim().strip_prefix("Host ").map(|a| a.trim().to_string())));
+    v
+}
+
+async fn autodl_instances(st: &State<'_, AppState>) -> (Vec<crate::market::RegularInstance>, Option<String>) {
+    match st.monitor.market() {
+        None => (vec![], Some("没有填写网页登录凭证，AutoDL 实例不会出现在这里".into())),
+        Some(m) => match m.instances().await {
+            Ok(v) => (v, None),
+            Err(e) => (vec![], Some(format!("读取 AutoDL 实例失败：{e}"))),
+        },
+    }
+}
+
+fn auto_sync_on(st: &State<'_, AppState>) -> bool {
+    st.store.kv_get("ssh_auto_sync").ok().flatten().as_deref() == Some("1")
+}
+
+#[tauri::command]
+pub async fn list_servers(st: State<'_, AppState>) -> R<ServerList> {
+    let (insts, autodl_error) = autodl_instances(&st).await;
+    let saved = st.store.servers()?;
+    let auto_sync = auto_sync_on(&st);
+    // 实例列表读失败时不同步，免得把配置里的 AutoDL 条目清掉
+    let synced = if auto_sync && autodl_error.is_none() {
+        sshconfig::write_block(&servers::managed_entries(&insts, &saved)).unwrap_or(false)
+    } else {
+        false
+    };
+    Ok(ServerList {
+        servers: servers::views(&st.store, &insts, &saved, &config_aliases()),
+        autodl_error,
+        own_key: crate::ssh::own_public_key(),
+        ssh_config_path: sshconfig::config_path().map(|p| p.display().to_string()),
+        auto_sync,
+        synced,
+    })
+}
+
+async fn find_server(st: &State<'_, AppState>, id: &str) -> R<ServerView> {
+    let saved = st.store.servers()?;
+    let insts = if id.starts_with("autodl:") { autodl_instances(st).await.0 } else { vec![] };
+    servers::views(&st.store, &insts, &saved, &config_aliases())
+        .into_iter()
+        .find(|v| v.id == id)
+        .ok_or_else(|| "找不到这台服务器，可能已经删除或实例已释放".to_string())
+}
+
+async fn server_password_inner(st: &State<'_, AppState>, v: &ServerView) -> R<Option<String>> {
+    if let Some(uuid) = v.id.strip_prefix("autodl:") {
+        if !v.has_password {
+            return Ok(None);
+        }
+        return market(st)?.instance_password(uuid).await.map(Some).map_err(s);
+    }
+    let id: i64 = v.id.trim_start_matches("srv:").parse().map_err(s)?;
+    Ok(crate::secret::load_server_password(&st.store, id))
+}
+
+/// 连接：推过公钥的先只用密钥，失败（比如实例重建过）再带上密码重试；主机密钥变化的错误直接返回
+async fn ssh_exec(st: &State<'_, AppState>, v: &ServerView, cmd: &str) -> R<crate::ssh::ExecOut> {
+    if v.host.is_empty() {
+        return Err("这台实例还没有 SSH 信息（可能还没开机）".into());
+    }
+    let pool = &st.monitor.ssh;
+    if v.key_pushed || v.auth == "key" {
+        match pool.exec(&servers::target(v, None), cmd).await {
+            Ok(o) => return Ok(o),
+            Err(e) if e.starts_with(crate::ssh::HOSTKEY_CHANGED) => return Err(e),
+            Err(e) if v.auth == "key" && !v.has_password => return Err(e),
+            Err(_) => {}
+        }
+    }
+    let pw = server_password_inner(st, v).await?;
+    let t = servers::target(v, pw);
+    pool.forget(&t).await;
+    pool.exec(&t, cmd).await
+}
+
+fn validate_server(sv: &Server) -> R<()> {
+    if sv.name.trim().is_empty() {
+        return Err("给服务器起个名字".into());
+    }
+    if !sshconfig::valid_host(sv.host.trim()) {
+        return Err("主机地址只能是域名或 IP".into());
+    }
+    if !sshconfig::valid_user(sv.user.trim()) {
+        return Err("用户名只能包含字母、数字和 . - _".into());
+    }
+    if !(1..=65535).contains(&sv.port) {
+        return Err("端口要在 1–65535 之间".into());
+    }
+    if !matches!(sv.auth.as_str(), "key" | "password") {
+        return Err("认证方式只能是私钥或密码".into());
+    }
+    Ok(())
+}
+
+/// 保存自己的服务器。password 为 Some 且非空时写进钥匙串；认证方式改成私钥时清掉旧密码
+#[tauri::command]
+pub fn save_server(st: State<'_, AppState>, server: Server, password: Option<String>) -> R<i64> {
+    let mut sv = server;
+    sv.name = sv.name.trim().to_string();
+    sv.host = sv.host.trim().to_string();
+    sv.user = sv.user.trim().to_string();
+    validate_server(&sv)?;
+    let id = st.store.save_server(sv.clone())?;
+    match (sv.auth.as_str(), password.filter(|p| !p.is_empty())) {
+        ("password", Some(pw)) => {
+            crate::secret::save_server_password(&st.store, id, &pw)?;
+        }
+        ("key", _) => crate::secret::clear_server_password(&st.store, id),
+        _ => {}
+    }
+    let _ = st.store.log(now(), "info", "server", None, &format!("保存服务器 {}（{}@{}:{}）", sv.name, sv.user, sv.host, sv.port));
+    Ok(id)
+}
+
+#[tauri::command]
+pub fn delete_server(st: State<'_, AppState>, id: i64) -> R<()> {
+    st.store.delete_server(id)?;
+    crate::secret::clear_server_password(&st.store, id);
+    Ok(())
+}
+
+/// ~/.ssh/config 里还没导入过的 Host
+#[tauri::command]
+pub fn ssh_config_hosts(st: State<'_, AppState>) -> R<Vec<sshconfig::HostEntry>> {
+    let text = sshconfig::config_path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+    let have: Vec<String> = st.store.servers()?.into_iter().filter_map(|s| s.alias).collect();
+    Ok(sshconfig::parse_config(&text).into_iter().filter(|h| !have.contains(&h.alias)).collect())
+}
+
+#[tauri::command]
+pub fn import_ssh_hosts(st: State<'_, AppState>, aliases: Vec<String>) -> R<usize> {
+    let text = sshconfig::config_path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+    let mut n = 0;
+    for h in sshconfig::parse_config(&text).into_iter().filter(|h| aliases.contains(&h.alias)) {
+        let user = if h.user.is_empty() { "root".to_string() } else { h.user.clone() };
+        st.store.save_server(Server {
+            id: 0, name: h.alias.clone(), host: h.host, port: h.port, user, auth: "key".into(),
+            key_path: h.identity_file, alias: Some(h.alias), note: None,
+        })?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+#[derive(Serialize)]
+pub struct SyncResult {
+    pub changed: bool,
+    pub count: usize,
+    pub path: String,
+}
+
+#[tauri::command]
+pub async fn sync_ssh_config(st: State<'_, AppState>) -> R<SyncResult> {
+    let (insts, err) = autodl_instances(&st).await;
+    if let (Some(e), true) = (err, st.monitor.market().is_some()) {
+        return Err(format!("{e}。为了不把配置里的 AutoDL 条目清掉，这次没有同步"));
+    }
+    let entries = servers::managed_entries(&insts, &st.store.servers()?);
+    let changed = sshconfig::write_block(&entries)?;
+    let path = sshconfig::config_path().map(|p| p.display().to_string()).unwrap_or_default();
+    if changed {
+        let _ = st.store.log(now(), "info", "server", None, &format!("同步 SSH 配置：{} 台服务器写入 {path}", entries.len()));
+    }
+    Ok(SyncResult { changed, count: entries.len(), path })
+}
+
+#[tauri::command]
+pub fn set_ssh_auto_sync(st: State<'_, AppState>, on: bool) -> R<()> {
+    st.store.kv_set("ssh_auto_sync", if on { "1" } else { "0" })
+}
+
+#[tauri::command]
+pub async fn open_terminal(st: State<'_, AppState>, id: String) -> R<()> {
+    let v = find_server(&st, &id).await?;
+    if v.host.is_empty() && !v.alias_ready {
+        return Err("这台实例还没有 SSH 信息（可能还没开机）".into());
+    }
+    let key = v.key_path.clone().filter(|k| !k.is_empty()).map(|k| servers::expand_home(&k).display().to_string());
+    let args = crate::terminal::ssh_args(v.alias_ready.then_some(v.alias.as_str()), &v.host, v.port, &v.user, key.as_deref())?;
+    crate::terminal::open(&v.name, &args)
+}
+
+/// VS Code Remote-SSH 要用 SSH 配置里的 Host 名，没同步过就提示先同步
+#[tauri::command]
+pub async fn vscode_url(st: State<'_, AppState>, id: String) -> R<String> {
+    let v = find_server(&st, &id).await?;
+    if !v.alias_ready {
+        return Err("NEED_SYNC|VS Code 要通过 SSH 配置里的名字连接，先点「同步到 SSH 配置」".into());
+    }
+    let dir = if v.user == "root" { "/root".to_string() } else { format!("/home/{}", v.user) };
+    Ok(format!("vscode://vscode-remote/ssh-remote+{}{dir}?windowId=_blank", v.alias))
+}
+
+/// 复制密码用：用户点了才取，不写日志
+#[tauri::command]
+pub async fn server_password(st: State<'_, AppState>, id: String) -> R<String> {
+    let v = find_server(&st, &id).await?;
+    server_password_inner(&st, &v).await?.ok_or_else(|| "这台服务器没有保存密码".into())
+}
+
+#[derive(Serialize)]
+pub struct Probe {
+    pub ms: u128,
+    pub system: String,
+    pub via_key: bool,
+}
+
+#[tauri::command]
+pub async fn test_server(st: State<'_, AppState>, id: String) -> R<Probe> {
+    let v = find_server(&st, &id).await?;
+    let t0 = std::time::Instant::now();
+    st.monitor.ssh.forget(&servers::target(&v, None)).await;
+    let out = ssh_exec(&st, &v, "uname -srm; (. /etc/os-release 2>/dev/null && echo \"$PRETTY_NAME\")").await?;
+    let system = out.stdout.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" · ");
+    Ok(Probe { ms: t0.elapsed().as_millis(), system, via_key: v.key_pushed || v.auth == "key" })
+}
+
+/// 生成（或读取已有的）软件密钥，返回公钥
+#[tauri::command]
+pub fn ensure_ssh_key() -> R<String> {
+    crate::ssh::ensure_own_key()
+}
+
+/// 把软件的公钥追加到服务器的 authorized_keys
+#[tauri::command]
+pub async fn push_ssh_key(st: State<'_, AppState>, id: String) -> R<()> {
+    let v = find_server(&st, &id).await?;
+    let script = crate::ssh::push_key_script(&crate::ssh::ensure_own_key()?)?;
+    let out = ssh_exec(&st, &v, &script).await?;
+    if out.code != Some(0) || !out.stdout.contains("ok") {
+        return Err(format!("推送公钥失败：{}", out.stderr.trim()));
+    }
+    st.store.kv_set(&servers::pushed_kv(&v.user, &v.host, v.port), "1")?;
+    st.monitor.ssh.forget(&servers::target(&v, None)).await;
+    let _ = st.store.log(now(), "info", "server", None, &format!("已把公钥推送到 {}（{}@{}:{}）", v.name, v.user, v.host, v.port));
+    Ok(())
+}
+
+/// 用户确认后信任新的主机密钥（清掉记住的旧指纹，下次连接重新记）
+#[tauri::command]
+pub async fn trust_host_key(st: State<'_, AppState>, id: String) -> R<()> {
+    let v = find_server(&st, &id).await?;
+    st.store.kv_set(&crate::ssh::hostkey_kv(&v.host, v.port as u16), "")?;
+    let _ = st.store.log(now(), "warn", "server", None, &format!("信任了 {}:{} 的新主机密钥", v.host, v.port));
+    Ok(())
+}

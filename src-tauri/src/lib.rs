@@ -6,6 +6,10 @@ pub mod monitor;
 mod notify;
 pub mod price;
 pub mod regions;
+pub mod servers;
+pub mod ssh;
+pub mod sshconfig;
+pub mod terminal;
 mod secret;
 pub mod store;
 mod tray;
@@ -82,6 +86,20 @@ pub fn run() {
             commands::delete_template,
             commands::create_from_template,
             commands::gpu_prices,
+            commands::list_servers,
+            commands::save_server,
+            commands::delete_server,
+            commands::ssh_config_hosts,
+            commands::import_ssh_hosts,
+            commands::sync_ssh_config,
+            commands::set_ssh_auto_sync,
+            commands::open_terminal,
+            commands::vscode_url,
+            commands::server_password,
+            commands::test_server,
+            commands::ensure_ssh_key,
+            commands::push_ssh_key,
+            commands::trust_host_key,
             commands::list_regular_instances,
             commands::regular_instance_password,
             commands::regular_power_on,

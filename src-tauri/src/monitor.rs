@@ -162,12 +162,15 @@ pub struct Monitor {
     last_prune: RwLock<i64>,
     /// 点开卡型时的价格缓存，监控按机器查到的结果也写进来
     pub prices: crate::price::PriceCache,
+    /// SSH 连接池（服务器页的测试连接、推送公钥、状态采集共用）
+    pub ssh: crate::ssh::SshPool,
 }
 
 pub type QKey = (String, Option<i64>, Option<i64>, i64, String);
 
 impl Monitor {
     pub fn new(store: Arc<Store>, token: Option<String>, web_token: Option<String>) -> Arc<Self> {
+        let ssh = crate::ssh::SshPool::new(store.clone());
         Arc::new(Self {
             store,
             token: RwLock::new(token),
@@ -179,6 +182,7 @@ impl Monitor {
             last_instances_check: RwLock::new(0),
             last_prune: RwLock::new(0),
             prices: Default::default(),
+            ssh,
         })
     }
 
@@ -570,20 +574,26 @@ impl Monitor {
     }
 
     async fn check_long_running(&self, app: &AppHandle, market: Option<&MarketClient>, client: Option<&Client>, hours: f64) {
-        if hours <= 0.0 {
-            return;
-        }
+        // hours <= 0 表示不提醒运行时长，但普通实例列表还要用来同步 SSH 配置
         // (uuid, 名称, 开机时间)
         let mut running: Vec<(String, String, i64)> = Vec::new();
         if let Some(m) = market {
             if let Ok(list) = m.instances().await {
+                // 顺便同步 SSH 配置：AutoDL 实例重新开机后端口可能变（设置里开了「自动同步」才做）
+                if self.store.kv_get("ssh_auto_sync").ok().flatten().as_deref() == Some("1") {
+                    if let Ok(saved) = self.store.servers() {
+                        if let Ok(true) = crate::sshconfig::write_block(&crate::servers::managed_entries(&list, &saved)) {
+                            self.log("info", "server", None, "AutoDL 实例的 SSH 信息有变化，已自动同步到 SSH 配置");
+                        }
+                    }
+                }
                 running.extend(list.into_iter().filter(|i| i.status == "running").filter_map(|i| {
                     let name = if i.name.is_empty() { format!("{} {}", i.region_name, i.machine_alias).trim().to_string() } else { i.name };
                     i.started_at.map(|t| (i.uuid, name, t))
                 }));
             }
         }
-        if let Some(c) = client {
+        if let Some(c) = client.filter(|_| hours > 0.0) {
             if let Ok(data) = c.list_instances(1, 100).await {
                 for inst in data.get("list").and_then(|l| l.as_array()).cloned().unwrap_or_default() {
                     if inst.get("status").and_then(|s| s.as_str()) != Some("running") {
@@ -599,7 +609,7 @@ impl Monitor {
         let ts = now();
         for (uuid, name, started) in running {
             let ran_h = (ts - started) as f64 / 3600.0;
-            if ran_h < hours {
+            if hours <= 0.0 || ran_h < hours {
                 continue;
             }
             let key = format!("long_alert:{uuid}:{started}");

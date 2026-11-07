@@ -134,6 +134,11 @@ impl Store {
                 idle INTEGER NOT NULL, total INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_hist ON stock_history(region, gpu_name, ts);
+            CREATE TABLE IF NOT EXISTS servers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL, user TEXT NOT NULL,
+                auth TEXT NOT NULL, key_path TEXT, alias TEXT, note TEXT
+            );
             CREATE TABLE IF NOT EXISTS logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, level TEXT NOT NULL,
                 kind TEXT NOT NULL, rule_id INTEGER, message TEXT NOT NULL
@@ -481,9 +486,80 @@ fn migrate(conn: &Connection) -> R<()> {
     Ok(())
 }
 
+/// 自己的 SSH 服务器（实验室 GPU 服务器、云服务器）。AutoDL 实例不存这里，每次从实例列表现查（端口会变）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Server {
+    pub id: i64,
+    pub name: String,
+    pub host: String,
+    pub port: i64,
+    pub user: String,
+    /// "key"：私钥文件（key_path，空则用软件生成的密钥）；"password"：密码存在系统钥匙串
+    pub auth: String,
+    pub key_path: Option<String>,
+    /// 从 ~/.ssh/config 导入时的 Host 名；有它就直接 `ssh <alias>`，不再写进软件管理的配置段
+    pub alias: Option<String>,
+    pub note: Option<String>,
+}
+
+impl Store {
+    pub fn servers(&self) -> R<Vec<Server>> {
+        let c = self.conn.lock().unwrap();
+        let mut st = c.prepare("SELECT id,name,host,port,user,auth,key_path,alias,note FROM servers ORDER BY id").map_err(e)?;
+        let rows = st
+            .query_map([], |r| {
+                Ok(Server {
+                    id: r.get(0)?, name: r.get(1)?, host: r.get(2)?, port: r.get(3)?, user: r.get(4)?,
+                    auth: r.get(5)?, key_path: r.get(6)?, alias: r.get(7)?, note: r.get(8)?,
+                })
+            })
+            .map_err(e)?
+            .filter_map(Result::ok)
+            .collect();
+        Ok(rows)
+    }
+
+    pub fn save_server(&self, s: Server) -> R<i64> {
+        let c = self.conn.lock().unwrap();
+        if s.id > 0 {
+            c.execute(
+                "UPDATE servers SET name=?2,host=?3,port=?4,user=?5,auth=?6,key_path=?7,alias=?8,note=?9 WHERE id=?1",
+                rusqlite::params![s.id, s.name, s.host, s.port, s.user, s.auth, s.key_path, s.alias, s.note],
+            ).map_err(e)?;
+            Ok(s.id)
+        } else {
+            c.execute(
+                "INSERT INTO servers(name,host,port,user,auth,key_path,alias,note) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+                rusqlite::params![s.name, s.host, s.port, s.user, s.auth, s.key_path, s.alias, s.note],
+            ).map_err(e)?;
+            Ok(c.last_insert_rowid())
+        }
+    }
+
+    pub fn delete_server(&self, id: i64) -> R<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute("DELETE FROM servers WHERE id=?1", [id]).map_err(e)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_crud() {
+        let s = Store::open_in_memory().unwrap();
+        let mut sv = Server { name: "实验室 A100".into(), host: "10.0.0.8".into(), port: 22, user: "tk".into(), auth: "key".into(), ..Default::default() };
+        sv.id = s.save_server(sv.clone()).unwrap();
+        assert_eq!(s.servers().unwrap(), vec![sv.clone()]);
+        sv.port = 2222;
+        sv.alias = Some("lab".into());
+        s.save_server(sv.clone()).unwrap();
+        assert_eq!(s.servers().unwrap()[0].port, 2222);
+        s.delete_server(sv.id).unwrap();
+        assert!(s.servers().unwrap().is_empty());
+    }
 
     #[test]
     fn seeds_and_crud() {

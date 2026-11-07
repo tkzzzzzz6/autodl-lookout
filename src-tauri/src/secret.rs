@@ -70,3 +70,34 @@ pub fn clear(store: &Store, k: Kind) {
     }
     let _ = store.kv_set(k.fallback_key(), "");
 }
+
+/// 自己的 SSH 服务器的密码：钥匙串里的账户名是 `server-<id>`，钥匙串不可用时退回数据库
+pub fn load_server_password(store: &Store, id: i64) -> Option<String> {
+    let user = format!("server-{id}");
+    if let Some(t) = keyring::Entry::new(SERVICE, &user).ok().and_then(|e| e.get_password().ok()) {
+        if !t.is_empty() {
+            return Some(t);
+        }
+    }
+    store.kv_get(&format!("{user}_fallback")).ok().flatten().filter(|t| !t.is_empty())
+}
+
+pub fn save_server_password(store: &Store, id: i64, password: &str) -> Result<bool, String> {
+    let user = format!("server-{id}");
+    if let Ok(e) = keyring::Entry::new(SERVICE, &user) {
+        if e.set_password(password).is_ok() && e.get_password().ok().as_deref() == Some(password) {
+            let _ = store.kv_set(&format!("{user}_fallback"), "");
+            return Ok(true);
+        }
+    }
+    store.kv_set(&format!("{user}_fallback"), password)?;
+    Ok(false)
+}
+
+pub fn clear_server_password(store: &Store, id: i64) {
+    let user = format!("server-{id}");
+    if let Ok(e) = keyring::Entry::new(SERVICE, &user) {
+        let _ = e.delete_credential();
+    }
+    let _ = store.kv_set(&format!("{user}_fallback"), "");
+}
