@@ -199,6 +199,14 @@ impl Store {
         c.query_row("SELECT v FROM kv WHERE k=?1", [k], |r| r.get(0)).optional().map_err(e)
     }
 
+    /// 某个前缀下的所有键值（如 `watch:` 开头的服务器提醒设置）
+    pub fn kv_prefix(&self, prefix: &str) -> R<Vec<(String, String)>> {
+        let c = self.conn.lock().unwrap();
+        let mut st = c.prepare("SELECT k, v FROM kv WHERE substr(k, 1, length(?1)) = ?1 ORDER BY k").map_err(e)?;
+        let rows = st.query_map([prefix], |r| Ok((r.get(0)?, r.get(1)?))).map_err(e)?.filter_map(Result::ok).collect();
+        Ok(rows)
+    }
+
     pub fn kv_set(&self, k: &str, v: &str) -> R<()> {
         let c = self.conn.lock().unwrap();
         c.execute("INSERT INTO kv(k,v) VALUES(?1,?2) ON CONFLICT(k) DO UPDATE SET v=excluded.v", [k, v])
@@ -546,6 +554,16 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kv_prefix_lists_matching_keys() {
+        let s = Store::open_in_memory().unwrap();
+        s.kv_set("watch:srv:1", "a").unwrap();
+        s.kv_set("watch:autodl:x", "b").unwrap();
+        s.kv_set("watcher", "no").unwrap();
+        let v = s.kv_prefix("watch:").unwrap();
+        assert_eq!(v, vec![("watch:autodl:x".to_string(), "b".to_string()), ("watch:srv:1".to_string(), "a".to_string())]);
+    }
 
     #[test]
     fn server_crud() {

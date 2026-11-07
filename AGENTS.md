@@ -80,6 +80,7 @@ src-tauri/src/
   servers.rs    服务器页：AutoDL 实例 + 自己的服务器的统一视图、SSH 别名、要写进 SSH 配置的条目
   ssh.rs        SSH 连接池（russh）：认证、执行命令、主机密钥记忆、软件密钥生成和推送
   sshconfig.rs  ~/.ssh/config 解析、软件管理段的读写、主机名 / 用户名校验
+  serverstat.rs 服务器状态：采集脚本、nvidia-smi / ps / df 输出解析、空闲 / 训练结束 / 磁盘提醒判断
   terminal.rs   打开系统终端执行 ssh（Windows Terminal / cmd、macOS 终端、Linux 终端）
   heatmap.rs    抢卡时段：库存历史按「星期 × 小时」聚合、一句话结论
   store.rs      SQLite：设置、规则、模板、库存历史、日志
@@ -93,7 +94,7 @@ src/
   ui.tsx        共用组件：毛玻璃列表 Group/Row/FormRow、Segmented、Select、Switch、Stepper、Sheet、CountUp、Toast…
   icons.tsx     线条图标（24×24，SF Symbols 风格），和 design/ 的设计稿同源
   api.ts        前端调用封装、类型、外部链接、卡型别名
-  hooks.ts      useGpuPrice（实时价格）等数据 hook
+  hooks.ts      useGpuPrice（实时价格）、usePolled（页面开着时定时刷新）等数据 hook
   mock.ts       浏览器预览用假数据
   pages/        库存、提醒规则、抢卡时段、我的实例、服务器、创建模板、日志、设置
   styles.css    设计令牌和样式（仅浅色）

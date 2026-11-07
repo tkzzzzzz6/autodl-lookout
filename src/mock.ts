@@ -1,5 +1,5 @@
 // 浏览器预览用的假数据（`npm run dev` 直接在浏览器里打开时生效；在 Tauri 里不会用到）
-import type { RegularInstance, Rule, ServerRecord, Settings, Snapshot, Template } from "./api";
+import type { RegularInstance, Rule, ServerRecord, Watch, Settings, Snapshot, Template } from "./api";
 
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -65,6 +65,7 @@ const snapshot = (): Snapshot => ({
 });
 
 let sshSynced = false;
+const watches: Record<string, Watch> = {};
 let autoSync = false;
 let ownKey: string | null = null;
 let myServers: ServerRecord[] = [
@@ -183,6 +184,24 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     ensure_ssh_key: () => { ownKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDemoDemoDemoDemoDemoDemoDemoDemo autodl-lookout"; return ownKey; },
     push_ssh_key: () => {},
     trust_host_key: () => {},
+    server_status: () => {
+      const lab = a.id === "srv:1";
+      const util = lab ? [97, 88, 0, 0, 100, 63, 0, 2] : (a.id as string).startsWith("autodl:") ? [1, 0] : [];
+      const gpus = util.map((u, i) => ({ index: i, uuid: `GPU-${i}`, name: lab ? "NVIDIA A100-SXM4-80GB" : "NVIDIA GeForce RTX 4090",
+        util: u, mem_used_mb: u > 3 ? 61234 + i * 900 : 4, mem_total_mb: lab ? 81920 : 24564, temp: 30 + u / 3, power_w: 60 + u * 3 }));
+      const users = ["zhangsan", "lisi", "tk"];
+      return {
+        nvidia: gpus.length > 0, gpus,
+        procs: gpus.filter((g) => g.util > 3).map((g, i) => ({ gpu: g.index, pid: 12000 + g.index, mem_mb: g.mem_used_mb - 500, user: lab ? users[i % 3] : null,
+          elapsed_secs: lab ? 3600 * (i + 2) : null, cmd: lab ? `python train.py --cfg configs/exp${i}.yaml` : null })),
+        load1: lab ? 23.5 : 0.4, cores: lab ? 128 : 16, mem_total: lab ? 1081234567890 : 64e9, mem_avail: lab ? 512345678901 : 51e9,
+        disks: lab ? [{ mount: "/", total: 1e12, used: 6.1e11 }, { mount: "/home", total: 8e12, used: 7.4e12 }]
+          : [{ mount: "/", total: 3e10, used: 1.2e10 }, { mount: "/root/autodl-tmp", total: 5e10, used: 4.6e10 }],
+        job_alive: watches[a.id as string]?.job_pid ? true : null, log_mtime: null, remote_now: null, fetched_at: now() - 3,
+      };
+    },
+    get_server_watch: () => watches[a.id as string] ?? { id: a.id, idle: false, idle_minutes: 30, disk: false, job_pid: null, job_log: null, job_quiet_minutes: 15 },
+    save_server_watch: () => { const w = a.watch as Watch; watches[w.id] = w; },
     stock_history: () => Array.from({ length: 96 }, (_, i) => ({
       ts: now() - (96 - i) * 900,
       idle: Math.max(0, Math.round(6 + 6 * Math.sin(i / 9) + (i % 7) - 3)), total: 1240,

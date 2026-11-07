@@ -79,3 +79,48 @@ export function useNowSec(ms = 1000) {
   }, [ms]);
   return t;
 }
+
+/**
+ * 页面开着时定时查一次数据：enabled 且窗口可见时每 30 秒一次，出错翻倍退避到 10 分钟，
+ * 关掉 / 隐藏就停；换 key 时丢掉还在路上的结果。返回 { data, err, loading, refresh }
+ */
+export function usePolled<T>(key: string, fetcher: () => Promise<T>, enabled: boolean) {
+  const [data, setData] = useState<T | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const f = useRef(fetcher);
+  f.current = fetcher;
+  const delay = useRef(BASE);
+  const timer = useRef<number | undefined>(undefined);
+  const live = useRef(false);
+  const seq = useRef(0);
+
+  const load = useCallback(async () => {
+    window.clearTimeout(timer.current);
+    const my = ++seq.current;
+    setLoading(true);
+    try {
+      const d = await f.current();
+      if (my !== seq.current) return;
+      setData(d); setErr(null); delay.current = BASE;
+    } catch (e) {
+      if (my !== seq.current) return;
+      setErr(String(e)); delay.current = Math.min(delay.current * 2, MAX);
+    } finally {
+      if (my === seq.current) setLoading(false);
+    }
+    if (live.current && document.visibilityState === "visible") timer.current = window.setTimeout(load, delay.current);
+  }, []);
+
+  useEffect(() => {
+    setData(null); setErr(null);
+    if (!enabled) return;
+    live.current = true; delay.current = BASE;
+    load();
+    const onVis = () => { if (document.visibilityState === "visible") load(); else window.clearTimeout(timer.current); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { live.current = false; seq.current++; window.clearTimeout(timer.current); document.removeEventListener("visibilitychange", onVis); };
+  }, [key, enabled, load]);
+
+  return { data, err, loading, refresh: load };
+}
