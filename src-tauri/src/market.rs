@@ -288,12 +288,30 @@ pub fn parse_cuda(s: &str) -> Option<i64> {
     Some(major * 10 + minor.min(9))
 }
 
+/// 这台机器现在能不能租（和控制台创建实例页选机器的逻辑一致）：
+/// - `on_line` 为 3 / 4 / 5 / 6 的是离线、维护等状态，有空卡也租不了
+/// - `binding_instance_num` 达到 `max_instance_num` 时这台机器挂不了新实例
+///
+/// 2026-11-07 实测北京B区 RTX 3080 Ti：两台 `on_line: 3` 各 8 张「空闲」、三台实例数已满各 1 张「空闲」，
+/// 按机器加起来 19 张，而算力市场（gpu_type）是 0 张。
+pub fn machine_rentable(m: &Value) -> bool {
+    let on_line = m.get("on_line").and_then(|v| v.as_i64()).unwrap_or(0);
+    if matches!(on_line, 3..=6) {
+        return false;
+    }
+    match (m.get("max_instance_num").and_then(|v| v.as_i64()), m.get("binding_instance_num").and_then(|v| v.as_i64())) {
+        (Some(max), Some(bound)) => max > bound,
+        _ => true,
+    }
+}
+
 pub fn parse_machines(d: &Value) -> (Vec<MachineSlot>, i64) {
     let max_page = d.get("max_page").and_then(|v| v.as_i64()).unwrap_or(1);
     let list = d.get("list").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let slots = list
         .iter()
         .filter(|m| m.get("payg").and_then(|v| v.as_bool()).unwrap_or(true))
+        .filter(|m| machine_rentable(m))
         .map(|m| MachineSlot {
             gpu_name: m.get("gpu_name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             idle: m.get("gpu_idle_num").and_then(|v| v.as_i64()).unwrap_or(0),
@@ -427,6 +445,29 @@ mod tests {
         let cuda = sum_filtered(&slots, None, Some(128), 1);
         assert_eq!(cuda.len(), 1);
         assert_eq!(cuda[0].idle, 2);
+    }
+
+    #[test]
+    fn skips_offline_and_full_machines() {
+        // 字段形状和数值来自 2026-11-07 北京B区 RTX 3080 Ti 的真实返回（其余字段省略）
+        let m = |idle, on_line, max, bind| json!({"gpu_name": "RTX 3080 Ti", "gpu_idle_num": idle, "on_line": on_line,
+            "max_instance_num": max, "binding_instance_num": bind, "payg_price": 1030, "highest_cuda_version": "13.2", "payg": true});
+        let d = json!({"max_page": 1, "list": [
+            m(8, 3, 150, 62), m(8, 3, 150, 15),        // 离线
+            m(1, 2, 150, 150), m(1, 2, 150, 150),      // 实例数满了
+            m(0, 2, 150, 147),
+            m(2, 2, 150, 140)                          // 真能租的
+        ]});
+        let (slots, _) = parse_machines(&d);
+        assert_eq!(slots.len(), 2);
+        let sum = sum_filtered(&slots, None, None, 1);
+        assert_eq!((sum[0].idle, sum[0].machines), (2, Some(1)));
+        // 没有这些字段的老格式照常算
+        assert!(machine_rentable(&json!({"gpu_idle_num": 1})));
+        for on_line in [3, 4, 5, 6] {
+            assert!(!machine_rentable(&json!({"on_line": on_line})));
+        }
+        assert!(machine_rentable(&json!({"on_line": 2, "max_instance_num": 10, "binding_instance_num": 9})));
     }
 
     #[test]
