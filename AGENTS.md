@@ -116,6 +116,8 @@ design/         设计稿 SVG（B2 风格）和应用图标源文件
 - `POST /api/v1/machine/region/gpu_type`，body `{"region_sign_list": [...]}`：各卡型空闲 / 总数，和算力市场顶部数字一致。
 - `POST /api/v1/user/machine/list`：按机器列出，带 `payg_price`（元 × 1000，每卡每小时）和 `highest_cuda_version`、每台的 `gpu_idle_num`，用于带单价 / CUDA / 单机卡数条件的规则。**`gpu_idle_num > 0` 不代表能租**：`on_line` 为 3–6（离线、维护）或 `binding_instance_num >= max_instance_num`（实例数满了）的机器要排除，见 `market::machine_rentable`，和控制台选机器的逻辑一致。
 - `GET  /api/v1/wallet`：余额（元 × 1000）。
+- `POST /api/v1/image/get`，body `{}`：公共基础镜像（`uuid`、框架 / 版本、`cuda_version`、`is_off`、`rank`）。
+- `POST /api/v1/order/instance/create/payg`：按量计费创建普通实例（**会扣费**），body 是 `{instance_info: {machine_id, charge_type: "payg", req_gpu_amount, base_image_uuid, …}, price_info: {machine_id, charge_type, duration: 1, num, coupon_id_list, …}}`（见 `market::rent_body`，照控制台前端抄的），成功时 `data` 是实例 uuid。只有库存页的手动租用会调用，前面必须过 `market::rent_guard` 和下单前的价格复核（`commands::rent_instance`）。
 - `POST /api/v1/instance`，body `{"page_index", "page_size"}`：我的普通容器实例；`POST /api/v1/instance/power_on` / `power_off`，body `{"instance_uuid"}`，无卡模式开机加 `"payload": "non_gpu"`。普通实例只做手动开关机，不接规则的自动动作；手动开机前过 `market::power_on_guard`（余额查得到且不低于「开机余额下限」、每台每天最多 5 次）；root 密码只在用户点复制时单独取，不放进列表、不写日志。
 
 这些接口不是官方开放的，随时可能变。改动相关代码时，返回格式的测试要用真实返回的字段形状（见 `market.rs` 里的测试）。

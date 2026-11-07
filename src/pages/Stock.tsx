@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { LINKS, call, fmtClock, gpuAlias, isGpu, openExternal, type HistoryPoint, type RegionStock, type Rule, type Settings, type Snapshot, type StockItem } from "../api";
+import { createPortal } from "react-dom";
+import { LINKS, call, fmtClock, gpuAlias, isGpu, openExternal, type BaseImage, type HistoryPoint, type Offer, type RegionStock, type RentResult, type Rule, type Settings, type Snapshot, type StockItem } from "../api";
 import { Icon } from "../icons";
 import { useGpuPrice, useNowSec } from "../hooks";
-import { Btn, CountUp, Group, Page, Segmented, Tile, softSpring, spring, useRefData } from "../ui";
+import { Btn, ConfirmButton, CountUp, FormRow, Group, Page, Row, Segmented, Select, Sheet, Stepper, Tile, softSpring, spring, useAction, useRefData, useToast } from "../ui";
 import type { PageId } from "../App";
 
 const FULL = 40; // 进度条满格 = 40 张
@@ -82,9 +83,110 @@ function ago(sec: number) {
   return `${Math.floor(sec / 60)} 分钟前更新`;
 }
 
+/* ---------------- 租用（会扣费） ---------------- */
+const cudaText = (c: number | null) => (c == null ? "" : (c / 10).toFixed(1));
+
+function RentSheet({ open, onClose, region, regionName, gpu, offers, onRented }: {
+  open: boolean; onClose: () => void; region: string; regionName: string; gpu: string; offers: Offer[]; onRented: () => void;
+}) {
+  const maxIdle = Math.min(8, Math.max(1, ...offers.map((o) => o.idle)));
+  const [n, setN] = useState(1);
+  const [pick, setPick] = useState<string | null>(null);
+  const [more, setMore] = useState(false);
+  const [images, setImages] = useState<BaseImage[] | null>(null);
+  const [image, setImage] = useState<string>("");
+  const [changed, setChanged] = useState<{ old_yuan: number; new_yuan: number } | null>(null);
+  const { busy, run } = useAction();
+  const toast = useToast();
+
+  useEffect(() => { if (open && !images) call<BaseImage[]>("base_images").then(setImages).catch((e) => toast(String(e), true)); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open) { setChanged(null); setMore(false); } }, [open]);
+
+  // 单机 N 卡：只列空闲够 N 张的机器，已经按单价从低到高排好；默认选最便宜的
+  const fit = offers.filter((o) => o.idle >= n);
+  const machine = fit.find((o) => o.machine_id === pick) ?? fit[0];
+  useEffect(() => { if (machine && machine.machine_id !== pick) setPick(machine.machine_id); }, [machine?.machine_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 镜像的 CUDA 不能高于机器驱动支持的版本
+  const okImages = (images ?? []).filter((i) => !machine?.max_cuda || i.cuda == null || i.cuda <= machine.max_cuda);
+  useEffect(() => { if (okImages.length && !okImages.some((i) => i.uuid === image)) setImage(okImages[0].uuid); }, [okImages.map((i) => i.uuid).join(), machine?.machine_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const price = changed?.new_yuan ?? machine?.price_yuan ?? 0;
+  const hourly = price * n;
+  const rent = async (accept: boolean) => {
+    if (!machine) return;
+    const r = await run(() => call<RentResult>("rent_instance", {
+      region, gpu, machineId: machine.machine_id, gpuAmount: n, imageUuid: image, expectedPrice: accept ? price : machine.price_yuan, acceptPrice: accept,
+    }));
+    if (!r) return;
+    if (r.status === "price_changed") { setChanged({ old_yuan: r.old_yuan, new_yuan: r.new_yuan }); return; }
+    toast("已下单，实例正在开机，到「我的实例」或「服务器」里查看");
+    onRented();
+    onClose();
+  };
+  const shown = more ? fit : fit.slice(0, 6);
+
+  return (
+    <Sheet open={open} onClose={onClose} title={`租用 ${gpu}`} left={<span />}
+      right={<button className="link-btn bold" onClick={onClose}>取消</button>}>
+      <p className="muted" style={{ fontSize: 13, margin: "14px 4px 0" }}>
+        {regionName}，按量计费：开机期间按小时扣费，关机后只收硬盘费用。数据和控制台算力市场一致，下单前会重新核对这台机器的价格。
+      </p>
+
+      <div className="group-label">配置</div>
+      <Group>
+        <FormRow icon="gpu_s" label="单机卡数"><Stepper value={n} min={1} max={maxIdle} unit=" 卡" onChange={(v) => { setN(v); setChanged(null); }} /></FormRow>
+        <FormRow icon="image" label="镜像">
+          <Select label="镜像" value={image} onChange={setImage} placeholder={images ? "没有可用的镜像" : "正在读取…"}
+            options={okImages.map((i) => ({ value: i.uuid, label: i.label, group: i.framework }))} />
+        </FormRow>
+      </Group>
+      <div className="group-foot">多卡训练要在同一台机器上，所以只列出空闲够 {n} 张的机器。{machine?.max_cuda ? `镜像只列出 CUDA ≤ ${cudaText(machine.max_cuda)} 的（这台机器驱动支持的最高版本）。` : ""}</div>
+
+      <div className="group-label">机器（按单价从低到高，默认最便宜）</div>
+      <Group>
+        {fit.length === 0 && <div className="empty-state">现在没有单台空闲 {n} 张的机器，少租几张试试。</div>}
+        {shown.map((o) => (
+          <Row key={o.machine_id} icon="server" grey={o.machine_id !== machine?.machine_id} onClick={() => { setPick(o.machine_id); setChanged(null); }}
+            label={<span className="num"><b>¥{o.price_yuan.toFixed(2)}</b> / 卡·时</span>}
+            sub={[o.machine_alias || o.machine_id, `空闲 ${o.idle} 张`, o.max_cuda ? `CUDA ≤ ${cudaText(o.max_cuda)}` : "", o.region_sign].filter(Boolean).join("，")}
+            right={o.machine_id === machine?.machine_id ? <Icon name="check" size={18} stroke={2.4} className="blue" /> : null} />
+        ))}
+        {fit.length > 6 && (
+          <button className="group-row tappable" style={{ color: "var(--blue)", justifyContent: "center", fontSize: 13 }} onClick={() => setMore(!more)}>
+            {more ? "收起" : `显示其余 ${fit.length - 6} 台`}
+          </button>
+        )}
+      </Group>
+
+      <AnimatePresence>
+        {changed && (
+          <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={softSpring}>
+            <Group style={{ marginTop: 16 }} className="idle-banner">
+              <div className="group-row" style={{ gap: 10 }}>
+                <Icon name="yen" size={20} stroke={2} />
+                <span className="grow">刚才核对时这台机器涨价了：¥{changed.old_yuan.toFixed(2)} → <b>¥{changed.new_yuan.toFixed(2)}</b> / 卡·时。确认的话按新价格租。</span>
+              </div>
+            </Group>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="rent-total">
+        <span className="num">¥{price.toFixed(2)} × {n} 卡 = <b>¥{hourly.toFixed(2)}</b> / 时</span>
+        <ConfirmButton icon="power" className="btn primary" disabled={busy || !machine || !image}
+          label={changed ? `按 ¥${changed.new_yuan.toFixed(2)} 租用` : "租用并开机"}
+          confirmLabel={`¥${hourly.toFixed(2)}/时 × ${n} 卡，再点确认`}
+          onConfirm={() => rent(!!changed)} />
+      </div>
+      <div className="group-foot">余额低于「开机余额下限」时不会下单。租到的实例会出现在「我的实例」和「服务器」里。</div>
+    </Sheet>
+  );
+}
+
 /** 点开卡型后的价格：用你自己的网页凭证实时查，单价随时会变 */
-function Prices({ region, gpu, idle }: { region: string; gpu: string; idle: number }) {
+function Prices({ region, regionName, gpu, idle }: { region: string; regionName: string; gpu: string; idle: number }) {
   const { data, err, loading, refresh } = useGpuPrice(region, gpu, idle > 0);
+  const [renting, setRenting] = useState(false);
   const now = useNowSec();
   if (idle <= 0) return null;
   const maxTier = Math.max(1, ...(data?.tiers.map((t) => t.idle) ?? [1]));
@@ -97,6 +199,7 @@ function Prices({ region, gpu, idle }: { region: string; gpu: string; idle: numb
         <span className="row" style={{ gap: 10, flexWrap: "nowrap" }}>
           <span className="muted num" style={{ fontSize: 11.5, whiteSpace: "nowrap" }}>{data ? ago(Math.max(0, now - data.fetched_at)) : loading ? "查询中…" : ""}</span>
           <Btn small icon="refresh" spinning={loading} onClick={refresh}>刷新</Btn>
+          {data && data.offers.length > 0 && <Btn small primary icon="power" onClick={() => setRenting(true)}>租用</Btn>}
         </span>
       </div>
       {data && data.median_yuan != null && data.min_yuan !== data.max_yuan && (
@@ -127,6 +230,12 @@ function Prices({ region, gpu, idle }: { region: string; gpu: string; idle: numb
         </div>
       )}
       {data && data.tiers.length === 0 && !err && <div className="muted" style={{ fontSize: 12, padding: "10px 0" }}>刚才查的时候已经没有可租的机器了，库存数字会在下一轮查询更新。</div>}
+      {/* 挂到 body 上：展开动画的容器带 transform，fixed 定位的面板会被困在卡片里 */}
+      {createPortal(
+        <RentSheet open={renting} onClose={() => setRenting(false)} region={region} regionName={regionName} gpu={gpu}
+          offers={data?.offers ?? []} onRented={refresh} />,
+        document.body,
+      )}
     </div>
   );
 }
@@ -172,7 +281,7 @@ function GpuRow({ region, regionName, marketUrl, it, watched, open, onToggle, ti
         {open && (
           <motion.div className="expand" key="x" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }} transition={softSpring}>
-            <Prices region={region} gpu={it.gpu_name} idle={it.idle} />
+            <Prices region={region} regionName={regionName} gpu={it.gpu_name} idle={it.idle} />
             <History region={region} gpu={it.gpu_name} />
             <RentBar url={marketUrl} regionName={regionName} gpu={it.gpu_name} idle={it.idle} />
           </motion.div>

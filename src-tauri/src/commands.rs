@@ -230,6 +230,84 @@ pub async fn gpu_prices(st: State<'_, AppState>, region: String, gpu: String, fo
     Ok((*info).clone())
 }
 
+// ---------- 租用（会扣费） ----------
+
+#[tauri::command]
+pub async fn base_images(st: State<'_, AppState>) -> R<Vec<crate::market::BaseImage>> {
+    st.monitor.base_images_cached().await
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum RentResult {
+    Created { instance_uuid: String },
+    /// 下单前重查发现价格变了：不下单，把新旧价格交给界面让用户再确认
+    PriceChanged { old_yuan: f64, new_yuan: f64 },
+}
+
+/// 租一台按量计费的普通实例（会扣费，只有手动操作）。安全阀（维护者在 #22 确认）：
+/// - 余额查得到且不低于「开机余额下限」（market::rent_guard），手动租用不限次数
+/// - 下单前重新查这台机器：租不了 / 空闲不够就拒绝；价格比界面上显示的贵时不下单、返回 PriceChanged，用户确认后带 accept_price 再来
+/// - 镜像的 CUDA 不能高于机器驱动支持的版本
+/// - 只做按量计费；下单、失败、拦下都写日志
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn rent_instance(
+    st: State<'_, AppState>, region: String, gpu: String, machine_id: String, gpu_amount: i64,
+    image_uuid: String, expected_price: f64, accept_price: bool,
+) -> R<RentResult> {
+    let m = market(&st)?;
+    let what = format!("{} {} × {}（机器 {machine_id}）", crate::regions::region_name(&region), gpu, gpu_amount);
+    let skip = |msg: &str| { let _ = st.store.log(now(), "warn", "skip", None, &format!("租用 {what} 被拦下：{msg}")); };
+    if !(1..=8).contains(&gpu_amount) {
+        return Err("卡数要在 1–8 之间".into());
+    }
+    let balance = m.wallet().await.map(|b| b.assets).map_err(s);
+    if let Err(e) = crate::market::rent_guard(balance, st.store.settings().auto_min_balance_yuan) {
+        skip(&e);
+        return Err(e);
+    }
+    // 下单前重查这台机器（market::parse_machines 已经排除了离线、实例数满的机器）
+    let signs = st.monitor.signs_of(&m, &region).await?;
+    let slots = m.machines(&signs, std::slice::from_ref(&gpu)).await.map_err(s)?;
+    let Some(slot) = slots.iter().find(|x| x.machine_id == machine_id) else {
+        let e = "这台机器现在租不了了（可能刚被租走或下线），换一台再试".to_string();
+        skip(&e);
+        return Err(e);
+    };
+    if slot.idle < gpu_amount {
+        let e = format!("这台机器现在只空 {} 张，不够 {gpu_amount} 张，换一台或少租几张", slot.idle);
+        skip(&e);
+        return Err(e);
+    }
+    if let Ok(images) = st.monitor.base_images_cached().await {
+        if let (Some(img), Some(max)) = (images.iter().find(|i| i.uuid == image_uuid), slot.max_cuda) {
+            if img.cuda.is_some_and(|c| c > max) {
+                let e = format!("镜像要 CUDA {:.1}，这台机器最高只支持 {:.1}，换个镜像或换台机器", img.cuda.unwrap() as f64 / 10.0, max as f64 / 10.0);
+                skip(&e);
+                return Err(e);
+            }
+        }
+    }
+    let price = slot.price_yuan.ok_or("这台机器没有按量计费价格，没法租用")?;
+    if crate::market::price_went_up(expected_price, price) && !accept_price {
+        skip(&format!("价格从 ¥{expected_price:.2} 变成 ¥{price:.2}，等用户确认"));
+        return Ok(RentResult::PriceChanged { old_yuan: expected_price, new_yuan: price });
+    }
+    let req = crate::market::RentReq { machine_id: machine_id.clone(), gpu_amount, image_uuid, name: String::new() };
+    match m.rent_payg(&req).await {
+        Ok(uuid) => {
+            let _ = st.store.log(now(), "info", "manual", None, &format!("租用 {what}，¥{price:.2}/卡·时，实例 {uuid}"));
+            st.monitor.invalidate_instances().await;
+            Ok(RentResult::Created { instance_uuid: uuid })
+        }
+        Err(e) => {
+            let _ = st.store.log(now(), "warn", "manual", None, &format!("租用 {what} 失败：{e}"));
+            Err(e)
+        }
+    }
+}
+
 // ---------- 普通容器实例（网页登录凭证） ----------
 
 #[tauri::command]

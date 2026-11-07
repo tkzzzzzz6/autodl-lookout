@@ -34,6 +34,17 @@ pub struct PriceTier {
     pub max_cuda: Option<i64>,
 }
 
+/// 一台可以租的机器（租用面板按它列出，默认选最便宜的）
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct Offer {
+    pub machine_id: String,
+    pub machine_alias: String,
+    pub region_sign: String,
+    pub idle: i64,
+    pub price_yuan: f64,
+    pub max_cuda: Option<i64>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct MultiCount {
     pub cards: i64,
@@ -58,6 +69,8 @@ pub struct PriceInfo {
     pub multi: Vec<MultiCount>,
     /// 没有标价的空闲卡（不计入价格统计）
     pub unpriced_idle: i64,
+    /// 能租的机器：按单价从低到高、同价按空闲从多到少，最多 60 台
+    pub offers: Vec<Offer>,
 }
 
 /// 只统计 gpu_name 完全相同、空闲 > 0 的机器
@@ -97,6 +110,17 @@ pub fn summarize(gpu_name: &str, slots: &[MachineSlot], fetched_at: i64) -> Pric
             .iter()
             .map(|&n| MultiCount { cards: n, machines: slots.iter().filter(|s| s.idle >= n).count() as i64 })
             .collect(),
+        offers: {
+            let mut o: Vec<Offer> = slots.iter().filter(|s| !s.machine_id.is_empty())
+                .filter_map(|s| s.price_yuan.filter(|p| *p > 0.0).map(|p| Offer {
+                    machine_id: s.machine_id.clone(), machine_alias: s.machine_alias.clone(), region_sign: s.region_sign.clone(),
+                    idle: s.idle, price_yuan: (p * 100.0).round() / 100.0, max_cuda: s.max_cuda,
+                }))
+                .collect();
+            o.sort_by(|a, b| a.price_yuan.partial_cmp(&b.price_yuan).unwrap().then(b.idle.cmp(&a.idle)));
+            o.truncate(60);
+            o
+        },
         tiers,
         unpriced_idle,
     }
@@ -181,7 +205,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn slot(gpu: &str, idle: i64, price: Option<f64>, cuda: Option<i64>) -> MachineSlot {
-        MachineSlot { gpu_name: gpu.into(), idle, price_yuan: price, max_cuda: cuda }
+        MachineSlot { gpu_name: gpu.into(), idle, price_yuan: price, max_cuda: cuda, ..Default::default() }
     }
 
     #[test]
@@ -207,6 +231,13 @@ mod tests {
             MultiCount { cards: 4, machines: 2 },
             MultiCount { cards: 8, machines: 1 },
         ]);
+    }
+
+    #[test]
+    fn offers_sorted_by_price_then_idle() {
+        let m = |id: &str, idle, price| MachineSlot { machine_id: id.into(), gpu_name: "A".into(), idle, price_yuan: Some(price), ..Default::default() };
+        let p = summarize("A", &[m("x", 1, 2.0), m("y", 4, 1.5), m("z", 8, 1.5), m("", 3, 1.0)], 0);
+        assert_eq!(p.offers.iter().map(|o| o.machine_id.as_str()).collect::<Vec<_>>(), vec!["z", "y", "x"], "没有 machine_id 的不列");
     }
 
     #[test]

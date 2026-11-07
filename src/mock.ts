@@ -168,8 +168,11 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
         price_yuan: Math.round((base + d) * 100) / 100, idle: [14, 6, 3][i], machines: [5, 3, 1][i],
         max_per_machine: [8, 4, 3][i], max_cuda: [128, 124, 122][i],
       }));
+      const idles = [8, 4, 2, 1, 1, 3, 1, 2, 1];
+      const offers = idles.map((idle, i) => ({ machine_id: `m-${i}`, machine_alias: `${120 + i * 7}机`, region_sign: i % 2 ? "bj-B2" : "bj-B1",
+        idle, price_yuan: tiers[i < 5 ? 0 : i < 8 ? 1 : 2].price_yuan, max_cuda: i === 2 ? 118 : 128 }));
       return { gpu_name: g, fetched_at: now() - 4, machines: 9, idle: 23, min_yuan: tiers[0].price_yuan, median_yuan: tiers[0].price_yuan,
-        max_yuan: tiers[2].price_yuan, tiers, multi: [{ cards: 2, machines: 6 }, { cards: 4, machines: 3 }, { cards: 8, machines: 1 }], unpriced_idle: 0 };
+        max_yuan: tiers[2].price_yuan, tiers, multi: [{ cards: 2, machines: 6 }, { cards: 4, machines: 3 }, { cards: 8, machines: 1 }], unpriced_idle: 0, offers };
     },
     list_servers: () => ({
       servers: [
@@ -223,6 +226,16 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     },
     get_server_watch: () => watches[a.id as string] ?? { id: a.id, idle: false, idle_minutes: 30, disk: false, job_pid: null, job_log: null, job_quiet_minutes: 15 },
     save_server_watch: () => { const w = a.watch as Watch; watches[w.id] = w; },
+    base_images: () => [
+      { uuid: "base-image-pt251", label: "PyTorch 2.5.1 · Python 3.12(ubuntu22.04) · CUDA 12.4", framework: "PyTorch", cuda: 124, rank: 30 },
+      { uuid: "base-image-pt210", label: "PyTorch 2.1.0 · Python 3.10(ubuntu22.04) · CUDA 12.1", framework: "PyTorch", cuda: 121, rank: 20 },
+      { uuid: "base-image-pt200", label: "PyTorch 2.0.0 · Python 3.8(ubuntu20.04) · CUDA 11.8", framework: "PyTorch", cuda: 118, rank: 10 },
+      { uuid: "base-image-conda", label: "Miniconda conda3 · Python 3.10(ubuntu22.04) · CUDA 11.8", framework: "Miniconda", cuda: 118, rank: 5 },
+    ],
+    // 演示：第一次租 m-1 时模拟价格刚涨了
+    rent_instance: () => (a.machineId === "m-1" && !a.acceptPrice
+      ? { status: "price_changed", old_yuan: a.expectedPrice, new_yuan: Math.round((Number(a.expectedPrice) + 0.2) * 100) / 100 }
+      : { status: "created", instance_uuid: "demo-instance-uuid" }),
     stock_history: () => Array.from({ length: 96 }, (_, i) => ({
       ts: now() - (96 - i) * 900,
       idle: Math.max(0, Math.round(6 + 6 * Math.sin(i / 9) + (i % 7) - 3)), total: 1240,

@@ -333,3 +333,8 @@ textarea.field-input { height: auto; padding: 10px 14px; resize: vertical; }
 .sys-line { display: grid; grid-template-columns: 136px 1fr auto; align-items: center; gap: 12px; padding: 9px 16px; font-size: 13px; }
 .sys-line > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .idle-banner { margin-bottom: 12px; background: var(--blue-soft); }
+
+/* 租用面板底部：每小时费用 + 确认按钮 */
+.rent-total { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; font-size: 14px; }
+.rent-total b { font-size: 18px; }
+.blue { color: var(--blue); }

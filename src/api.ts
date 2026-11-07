@@ -53,7 +53,14 @@ export interface PriceInfo {
   gpu_name: string; fetched_at: number; machines: number; idle: number;
   min_yuan: number | null; median_yuan: number | null; max_yuan: number | null;
   tiers: PriceTier[]; multi: { cards: number; machines: number }[]; unpriced_idle: number;
+  /** 能租的机器，按单价从低到高 */
+  offers: Offer[];
 }
+export interface Offer { machine_id: string; machine_alias: string; region_sign: string; idle: number; price_yuan: number; max_cuda: number | null }
+export interface BaseImage { uuid: string; label: string; framework: string; cuda: number | null; rank: number }
+export type RentResult =
+  | { status: "created"; instance_uuid: string }
+  | { status: "price_changed"; old_yuan: number; new_yuan: number };
 export interface Balance { assets: number; accumulate: number; voucher_balance: number }
 export interface RegionStock { region: string; region_name: string; items: StockItem[]; error: string | null; market_url: string }
 export interface RuleState { rule_id: number; hit: boolean; idle_sum: number; machines: number | null; matched: string[]; error: string | null; market_url: string }

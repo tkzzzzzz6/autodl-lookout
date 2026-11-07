@@ -26,8 +26,12 @@ pub struct MarketRegion {
 }
 
 /// 单台机器里规则关心的字段
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct MachineSlot {
+    /// 租用时要用；老测试里可以留空
+    pub machine_id: String,
+    pub machine_alias: String,
+    pub region_sign: String,
     pub gpu_name: String,
     pub idle: i64,
     /// 每卡每小时，元
@@ -214,6 +218,109 @@ pub fn power_on_guard(balance: Result<f64, String>, min_balance: f64, attempts_t
     Ok(())
 }
 
+/* ---------------- 租用（创建按量计费的普通实例） ---------------- */
+
+/// 公共基础镜像（控制台创建实例页的「基础镜像」）
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct BaseImage {
+    pub uuid: String,
+    /// 如「PyTorch 2.5.1 · Python 3.12(ubuntu22.04) · CUDA 12.4」
+    pub label: String,
+    pub framework: String,
+    /// 如 "12.4" → 124；拿来和机器驱动支持的最高 CUDA 比
+    pub cuda: Option<i64>,
+    pub rank: i64,
+}
+
+pub fn parse_base_images(d: &Value) -> Vec<BaseImage> {
+    let mut v: Vec<BaseImage> = d.as_array().cloned().unwrap_or_default().iter()
+        .filter(|i| !i.get("is_off").and_then(|x| x.as_bool()).unwrap_or(false))
+        .filter(|i| matches!(i.get("chip_corp").and_then(|x| x.as_str()), None | Some("nvidia") | Some("")))
+        .filter(|i| !i.get("is_desktop").and_then(|x| x.as_bool()).unwrap_or(false))
+        .map(|i| {
+            let fw = str_of(i, "framework_name");
+            let cuda = str_of(i, "cuda_version");
+            BaseImage {
+                uuid: str_of(i, "uuid"),
+                label: format!("{} {} · Python {} · CUDA {}", fw, str_of(i, "framework_version"), str_of(i, "python_version"), cuda),
+                framework: fw,
+                cuda: parse_cuda(&cuda),
+                rank: i.get("rank").and_then(|x| x.as_i64()).unwrap_or(0),
+            }
+        })
+        .filter(|i| !i.uuid.is_empty())
+        .collect();
+    // 和控制台一样按 rank 排（同一框架里新版本在前）
+    v.sort_by(|a, b| b.rank.cmp(&a.rank));
+    v
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RentReq {
+    pub machine_id: String,
+    pub gpu_amount: i64,
+    pub image_uuid: String,
+    pub name: String,
+}
+
+/// 控制台「创建实例 → 按量计费」提交的 body（字段照前端代码 market-create-instance 抄的，只用基础镜像、不扩容、不用优惠券）
+pub fn rent_body(r: &RentReq) -> Value {
+    json!({
+        "instance_info": {
+            "machine_id": r.machine_id, "charge_type": "payg", "req_gpu_amount": r.gpu_amount,
+            "base_image_uuid": r.image_uuid, "private_image_uuid": "", "reproduction_uuid": "",
+            "cg_application_uuid": "",
+            "cg_application_info": { "image_name": "", "current_version_id": 0, "current_version": "", "image_id": 0 },
+            "instance_name": r.name, "expand_data_disk": 0, "reproduction_id": 0
+        },
+        "price_info": {
+            "coupon_id_list": [], "machine_id": r.machine_id, "charge_type": "payg",
+            "duration": 1, "num": r.gpu_amount, "expand_data_disk": 0
+        }
+    })
+}
+
+/// 下单接口的错误码翻译成能看懂、知道怎么办的话
+pub fn rent_error(code: &str, msg: &str) -> String {
+    match code {
+        "MachineGpuNumUpdateFailed" => "这台机器的空闲卡刚被别人租走了，换一台再试".into(),
+        "TORecharge" => format!("余额不足，先到控制台充值（{msg}）"),
+        "TORealName" => "账号还没有实名认证，先到控制台完成实名".into(),
+        "OrderUnpaidMoreThanThree" => "你有 3 个以上未支付的订单，先到控制台处理".into(),
+        _ => format!("下单失败：{msg}（{code}）"),
+    }
+}
+
+/// 租用前的安全阀（维护者确认：手动租用不限次数）：余额必须查得到，且不低于「开机余额下限」
+pub fn rent_guard(balance: Result<f64, String>, min_balance: f64) -> Result<(), String> {
+    let b = balance.map_err(|e| format!("查不到余额，为了避免意外扣费暂不租用：{e}"))?;
+    if b < min_balance {
+        return Err(format!("当前余额 {b:.2} 元，低于「开机余额下限」{min_balance:.2} 元，暂不租用。可以先充值，或在「设置」里调低下限"));
+    }
+    Ok(())
+}
+
+/// 下单前复核的价格比界面上显示的贵（差半分以内算没变，避免浮点误差）
+pub fn price_went_up(expected_yuan: f64, actual_yuan: f64) -> bool {
+    actual_yuan > expected_yuan + 0.005
+}
+
+impl MarketClient {
+    pub async fn base_images(&self) -> ApiResult<Vec<BaseImage>> {
+        let d = self.call(reqwest::Method::POST, "/api/v1/image/get", Some(json!({}))).await?;
+        Ok(parse_base_images(&d))
+    }
+
+    /// 按量计费创建一台普通实例（会扣费；调用方先过 rent_guard 和价格复核）。成功返回实例 uuid
+    pub async fn rent_payg(&self, r: &RentReq) -> Result<String, String> {
+        match self.call(reqwest::Method::POST, "/api/v1/order/instance/create/payg", Some(rent_body(r))).await {
+            Ok(d) => Ok(d.as_str().map(str::to_string).unwrap_or_else(|| d.to_string())),
+            Err(ApiError::Api { code, msg }) => Err(rent_error(&code, &msg)),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+}
+
 fn str_of(v: &Value, k: &str) -> String {
     v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string()
 }
@@ -313,6 +420,9 @@ pub fn parse_machines(d: &Value) -> (Vec<MachineSlot>, i64) {
         .filter(|m| m.get("payg").and_then(|v| v.as_bool()).unwrap_or(true))
         .filter(|m| machine_rentable(m))
         .map(|m| MachineSlot {
+            machine_id: str_of(m, "machine_id"),
+            machine_alias: str_of(m, "machine_alias"),
+            region_sign: str_of(m, "region_sign"),
             gpu_name: m.get("gpu_name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             idle: m.get("gpu_idle_num").and_then(|v| v.as_i64()).unwrap_or(0),
             price_yuan: m.get("payg_price").and_then(|v| v.as_f64()).map(|p| p / 1000.0),
@@ -448,6 +558,63 @@ mod tests {
     }
 
     #[test]
+    fn parses_base_images() {
+        // 字段形状来自 POST /api/v1/image/get 的真实返回
+        let d = json!([
+            {"uuid": "base-image-db8346e037", "framework_name": "PyTorch", "framework_version": "1.7.0", "python_version": "3.8(ubuntu18.04)",
+             "cuda_version": "11.0", "is_off": false, "rank": 20961010, "chip_corp": "nvidia", "cpu_arch": "x86", "is_desktop": false},
+            {"uuid": "base-image-new", "framework_name": "PyTorch", "framework_version": "2.5.1", "python_version": "3.12(ubuntu22.04)",
+             "cuda_version": "12.4", "is_off": false, "rank": 20991010, "chip_corp": "nvidia", "cpu_arch": "x86", "is_desktop": false},
+            {"uuid": "base-image-off", "framework_name": "PyTorch", "framework_version": "1.5.1", "python_version": "3.8", "cuda_version": "10.1", "is_off": true, "rank": 1},
+            {"uuid": "base-image-desk", "framework_name": "Desktop", "framework_version": "1", "python_version": "3.8", "cuda_version": "11.8", "is_off": false, "is_desktop": true, "rank": 99999999}
+        ]);
+        let v = parse_base_images(&d);
+        assert_eq!(v.iter().map(|i| i.uuid.as_str()).collect::<Vec<_>>(), vec!["base-image-new", "base-image-db8346e037"]);
+        assert_eq!(v[0].label, "PyTorch 2.5.1 · Python 3.12(ubuntu22.04) · CUDA 12.4");
+        assert_eq!(v[0].cuda, Some(124));
+    }
+
+    #[test]
+    fn rent_body_matches_console() {
+        let b = rent_body(&RentReq { machine_id: "m-1".into(), gpu_amount: 2, image_uuid: "base-image-new".into(), name: "lookout".into() });
+        assert_eq!(b["instance_info"]["machine_id"], "m-1");
+        assert_eq!(b["instance_info"]["charge_type"], "payg");
+        assert_eq!(b["instance_info"]["req_gpu_amount"], 2);
+        assert_eq!(b["instance_info"]["base_image_uuid"], "base-image-new");
+        assert_eq!(b["price_info"]["num"], 2);
+        assert_eq!(b["price_info"]["charge_type"], "payg");
+        assert_eq!(b["price_info"]["coupon_id_list"], json!([]));
+    }
+
+    #[test]
+    fn rent_guard_and_errors() {
+        assert!(rent_guard(Ok(50.0), 10.0).is_ok());
+        assert!(rent_guard(Ok(9.0), 10.0).unwrap_err().contains("低于"));
+        assert!(rent_guard(Err("超时".into()), 10.0).unwrap_err().contains("查不到余额"));
+        assert!(rent_error("MachineGpuNumUpdateFailed", "x").contains("换一台"));
+        assert!(rent_error("Weird", "something").contains("Weird"));
+        assert!(!price_went_up(1.03, 1.03) && !price_went_up(1.03, 1.0300001) && !price_went_up(1.03, 0.98));
+        assert!(price_went_up(1.03, 1.08));
+    }
+
+    #[tokio::test]
+    async fn rent_request_shape() {
+        let (base, h) = serve_once(r#"{"code":"Success","data":"inst-uuid-1","msg":""}"#).await;
+        let c = MarketClient::with_base("web.jwt.token", base);
+        let id = c.rent_payg(&RentReq { machine_id: "m-1".into(), gpu_amount: 1, image_uuid: "base-image-new".into(), name: "".into() }).await.unwrap();
+        assert_eq!(id, "inst-uuid-1");
+        let req = h.await.unwrap();
+        assert!(req.starts_with("POST /api/v1/order/instance/create/payg "));
+        assert!(req.to_lowercase().contains("authorization: web.jwt.token"));
+        assert!(req.contains(r#""req_gpu_amount":1"#) && req.contains(r#""machine_id":"m-1""#));
+
+        let (base, _h) = serve_once(r#"{"code":"MachineGpuNumUpdateFailed","data":null,"msg":"gpu not enough"}"#).await;
+        let e = MarketClient::with_base("web.jwt.token", base)
+            .rent_payg(&RentReq { machine_id: "m-1".into(), gpu_amount: 8, image_uuid: "x".into(), name: "".into() }).await.unwrap_err();
+        assert!(e.contains("换一台"), "{e}");
+    }
+
+    #[test]
     fn skips_offline_and_full_machines() {
         // 字段形状和数值来自 2026-11-07 北京B区 RTX 3080 Ti 的真实返回（其余字段省略）
         let m = |idle, on_line, max, bind| json!({"gpu_name": "RTX 3080 Ti", "gpu_idle_num": idle, "on_line": on_line,
@@ -472,7 +639,7 @@ mod tests {
 
     #[test]
     fn per_machine_threshold_counts_only_big_enough_machines() {
-        let slot = |idle, price: f64, cuda| MachineSlot { gpu_name: "RTX 4090".into(), idle, price_yuan: Some(price), max_cuda: Some(cuda) };
+        let slot = |idle, price: f64, cuda| MachineSlot { gpu_name: "RTX 4090".into(), idle, price_yuan: Some(price), max_cuda: Some(cuda), ..Default::default() };
         // 区域里一共空 1+1+1+2+4 = 9 张，但能开 2 卡的只有后两台
         let slots = vec![slot(1, 2.0, 132), slot(1, 2.0, 132), slot(1, 2.0, 132), slot(2, 2.5, 124), slot(4, 2.0, 132)];
         let n1 = sum_filtered(&slots, None, None, 1);
