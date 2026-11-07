@@ -76,6 +76,7 @@ src-tauri/src/
   api.rs        AutoDL 官方开放 API（开发者 Token）：余额、容器实例 Pro、镜像
   market.rs     算力市场库存、余额、普通容器实例（网页登录凭证，控制台内部接口）
   monitor.rs    后台轮询：库存 → 历史 → 规则 → 通知 / 自动动作；余额、运行时长、凭证过期提醒
+  price.rs      点开卡型时的实时价格：汇总分档，缓存 + 合并请求 + 全局限流
   heatmap.rs    抢卡时段：库存历史按「星期 × 小时」聚合、一句话结论
   store.rs      SQLite：设置、规则、模板、库存历史、日志
   secret.rs     凭证存系统钥匙串（Windows 凭据管理器 / macOS Keychain），不可用时退回数据库
@@ -88,6 +89,7 @@ src/
   ui.tsx        共用组件：毛玻璃列表 Group/Row/FormRow、Segmented、Select、Switch、Stepper、Sheet、CountUp、Toast…
   icons.tsx     线条图标（24×24，SF Symbols 风格），和 design/ 的设计稿同源
   api.ts        前端调用封装、类型、外部链接、卡型别名
+  hooks.ts      useGpuPrice（实时价格）等数据 hook
   mock.ts       浏览器预览用假数据
   pages/        库存、提醒规则、抢卡时段、我的实例、创建模板、日志、设置
   styles.css    设计令牌和样式（仅浅色）
@@ -144,4 +146,5 @@ design/         设计稿 SVG（B2 风格）和应用图标源文件
 
 - 新的 Tauri 命令：在 `commands.rs` 实现，在 `lib.rs` 的 `generate_handler!` 注册；前端通过 `api.ts` 的 `call()` 调用，参数名用 camelCase（Tauri 自动转 snake_case）。如果浏览器预览要用到，同时在 `mock.ts` 里加假数据。
 - 数据库结构变化要兼容老数据（`CREATE TABLE IF NOT EXISTS`、新增列给默认值）。
-- 轮询间隔最少 30 秒，出错时指数退避到 10 分钟，不要为了“更实时”去掉。前端页面自己的定时刷新也一样（见 `Instances.tsx` 的 `usePolling`）。
+- 轮询间隔最少 30 秒，出错时指数退避到 10 分钟，不要为了“更实时”去掉。前端页面自己的定时刷新也一样（见 `Instances.tsx` 的 `usePolling`、`hooks.ts` 的 `useGpuPrice`）。
+- 新增调用 AutoDL 的按需查询（用户点开才查的那种）走缓存 + 合并请求 + 限流，参考 `price.rs`；不要让界面直接、反复地打上游。

@@ -286,3 +286,18 @@ textarea.field-input { height: auto; padding: 10px 14px; resize: vertical; }
 .select-label small { font-size: 11.5px; font-weight: 400; color: var(--muted); }
 .select-capsule { gap: 4px; padding-right: 2px; color: var(--ink); }
 .select-capsule .select-btn { height: 22px; font-size: 12.5px; margin-right: 0; padding: 0 4px 0 6px; }
+
+/* 点开卡型后的实时价格 */
+.prices { padding: 6px 18px 4px 56px; }
+.price-range { color: var(--ink); font-size: 14px; font-weight: 650; }
+.tiers { display: grid; gap: 6px; margin-top: 10px; }
+.tier { display: grid; grid-template-columns: 64px minmax(60px, 1fr) 48px auto; align-items: center; gap: 10px; font-size: 13px; }
+.tier-price { font-weight: 600; color: var(--ink); }
+.tier-bar { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+.tier-bar i { display: block; height: 100%; border-radius: 3px; background: var(--blue); }
+.tier-idle { text-align: right; }
+.tier-sub { font-size: 11.5px; min-width: 210px; }
+.multi { gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.multi .capsule { font-size: 12px; gap: 6px; }
+.multi .capsule b { color: var(--blue); font-weight: 650; }
+.multi .capsule.dim { opacity: .5; }

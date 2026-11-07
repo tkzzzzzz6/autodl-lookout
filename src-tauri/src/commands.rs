@@ -213,6 +213,23 @@ pub async fn create_from_template(st: State<'_, AppState>, id: i64) -> R<String>
     Ok(id)
 }
 
+// ---------- 实时价格（网页登录凭证） ----------
+
+/// 点开卡型时查价格。force = 手动刷新：只要结果超过 3 秒就重新查；否则 15 秒内用缓存。
+/// 同一卡型同时只查一次、全局限流，见 price.rs。
+#[tauri::command]
+pub async fn gpu_prices(st: State<'_, AppState>, region: String, gpu: String, force: bool) -> R<crate::price::PriceInfo> {
+    let m = market(&st)?;
+    let max_age = if force { crate::price::FORCE_MIN_AGE_MS } else { crate::price::FRESH_MS };
+    let mon = st.monitor.clone();
+    let (r, g) = (region.clone(), gpu.clone());
+    let info = st.monitor.prices.get(&region, &gpu, max_age, || async move {
+        let signs = mon.signs_of(&m, &r).await?;
+        m.machines(&signs, std::slice::from_ref(&g)).await.map_err(|e| e.to_string())
+    }).await?;
+    Ok((*info).clone())
+}
+
 // ---------- 普通容器实例（网页登录凭证） ----------
 
 #[tauri::command]
