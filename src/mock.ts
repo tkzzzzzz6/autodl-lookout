@@ -3,10 +3,13 @@ import type { RegularInstance, Rule, Settings, Snapshot, Template } from "./api"
 
 const now = () => Math.floor(Date.now() / 1000);
 
+// 和 regions.rs 的 REGIONS 一致（10 个区域），区域菜单的高度和真实情况一样，会出滚动条
 const regionsRef = [
-  { value: "westDC2", label: "西北企业区" }, { value: "westDC3", label: "西北B区" },
-  { value: "beijingDC1", label: "北京A区" }, { value: "beijingDC2", label: "北京B区" },
-  { value: "neimengDC1", label: "内蒙A区" }, { value: "chongqingDC1", label: "重庆A区" },
+  { value: "westDC3", label: "西北B区" }, { value: "beijingDC2", label: "北京B区" },
+  { value: "chongqingDC1", label: "重庆A区" }, { value: "neimengDC3", label: "内蒙B区" },
+  { value: "beijingDC1", label: "北京A区" }, { value: "foshanDC1", label: "佛山区" },
+  { value: "beijingDC3", label: "V100专区" }, { value: "neimengDC2", label: "A800专区" },
+  { value: "shanghaiDC1", label: "摩尔线程专区" }, { value: "westDC2", label: "西北企业区" },
 ];
 
 let settings: Settings = {

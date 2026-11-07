@@ -264,7 +264,12 @@ export function Select<T extends string | number | null>({ value, options, onCha
     const away = (e: PointerEvent) => {
       if (!menu.current?.contains(e.target as Node) && !btn.current?.contains(e.target as Node)) close(false);
     };
-    const reflow = () => close(false); // 窗口变化或外层滚动时直接收起，避免菜单和按钮错位
+    // 窗口变化或外层滚动时直接收起，避免菜单和按钮错位。
+    // 滚动事件在捕获阶段对任何元素都会触发，菜单自己滚动（滚轮、键盘选项 scrollIntoView）要排除，否则一滚就关
+    const reflow = (e: Event) => {
+      if (e.type === "scroll" && e.target instanceof Node && menu.current?.contains(e.target)) return;
+      close(false);
+    };
     window.addEventListener("pointerdown", away, true);
     window.addEventListener("resize", reflow);
     window.addEventListener("scroll", reflow, true);
