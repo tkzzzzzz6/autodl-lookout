@@ -123,22 +123,21 @@ pub fn target(v: &ServerView, password: Option<String>) -> Target {
 }
 
 /// 服务器的密码：AutoDL 实例用网页凭证单独取（不进列表、不写日志），自己的服务器从钥匙串读
-pub async fn password(store: &Store, market: Option<&crate::market::MarketClient>, v: &ServerView) -> Result<Option<String>, String> {
+pub async fn password(mon: &crate::monitor::Monitor, v: &ServerView) -> Result<Option<String>, String> {
     if let Some(uuid) = v.id.strip_prefix("autodl:") {
         if !v.has_password {
             return Ok(None);
         }
-        let m = market.ok_or("还没有填写网页登录凭证，取不到 AutoDL 实例的密码")?;
-        return m.instance_password(uuid).await.map(Some).map_err(|e| e.to_string());
+        return mon.instance_password_cached(uuid).await.map(Some);
     }
     let id: i64 = v.id.trim_start_matches("srv:").parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
-    Ok(crate::secret::load_server_password(store, id))
+    Ok(crate::secret::load_server_password(&mon.store, id))
 }
 
 /// 在服务器上执行命令：推过公钥或用私钥的先只用密钥，失败（比如实例重建过）再带上密码重试；
 /// 主机密钥变化的错误直接返回，不会退回密码
-pub async fn exec(store: &Store, pool: &crate::ssh::SshPool, market: Option<&crate::market::MarketClient>, v: &ServerView, cmd: &str)
-    -> Result<crate::ssh::ExecOut, String> {
+pub async fn exec(mon: &crate::monitor::Monitor, v: &ServerView, cmd: &str) -> Result<crate::ssh::ExecOut, String> {
+    let pool = &mon.ssh;
     if v.host.is_empty() {
         return Err("这台实例还没有 SSH 信息（可能还没开机）".into());
     }
@@ -150,7 +149,7 @@ pub async fn exec(store: &Store, pool: &crate::ssh::SshPool, market: Option<&cra
             Err(_) => {}
         }
     }
-    let pw = password(store, market, v).await?;
+    let pw = password(mon, v).await?;
     let t = target(v, pw);
     pool.forget(&t).await;
     pool.exec(&t, cmd).await

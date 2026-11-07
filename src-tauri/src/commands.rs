@@ -364,12 +364,10 @@ fn config_aliases() -> Vec<String> {
 }
 
 async fn autodl_instances(st: &State<'_, AppState>) -> (Vec<crate::market::RegularInstance>, Option<String>) {
-    match st.monitor.market() {
-        None => (vec![], Some("没有填写网页登录凭证，AutoDL 实例不会出现在这里".into())),
-        Some(m) => match m.instances().await {
-            Ok(v) => (v, None),
-            Err(e) => (vec![], Some(format!("读取 AutoDL 实例失败：{e}"))),
-        },
+    // 服务器页、状态面板反复刷新时复用最近的结果（见 Monitor::instances_cached）
+    match st.monitor.instances_cached(crate::monitor::INSTANCES_FRESH_SECS).await {
+        Ok(v) => (v, None),
+        Err(e) => (vec![], Some(e)),
     }
 }
 
@@ -408,12 +406,12 @@ async fn find_server(st: &State<'_, AppState>, id: &str) -> R<ServerView> {
 }
 
 async fn server_password_inner(st: &State<'_, AppState>, v: &ServerView) -> R<Option<String>> {
-    servers::password(&st.store, st.monitor.market().as_ref(), v).await
+    servers::password(&st.monitor, v).await
 }
 
 /// 连接：推过公钥的先只用密钥，失败（比如实例重建过）再带上密码重试；主机密钥变化的错误直接返回
 async fn ssh_exec(st: &State<'_, AppState>, v: &ServerView, cmd: &str) -> R<crate::ssh::ExecOut> {
-    servers::exec(&st.store, &st.monitor.ssh, st.monitor.market().as_ref(), v, cmd).await
+    servers::exec(&st.monitor, v, cmd).await
 }
 
 fn validate_server(sv: &Server) -> R<()> {
