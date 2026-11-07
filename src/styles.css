@@ -24,6 +24,7 @@
   --track: rgba(17, 24, 39, .07);
   --glass: rgba(255, 255, 255, .62);
   --glass-strong: rgba(255, 255, 255, .80);
+  --glass-menu: rgba(255, 255, 255, .94); /* 弹出菜单：比面板更实，下面的文字不透出来 */
   --edge: rgba(255, 255, 255, .85);
   --green: #34c759;
   --orange: #ff9f0a;
@@ -199,7 +200,6 @@ button { cursor: pointer; }
 .capsule.err { background: rgba(255, 59, 48, .12); color: var(--red); }
 .inline-input { border: 0; background: transparent; text-align: right; color: var(--ink); min-width: 0; width: 100%; outline: none; font-size: 14px; }
 .inline-input::placeholder { color: var(--faint); }
-.inline-select { border: 0; background: transparent; color: var(--muted); text-align: right; font-size: 14px; outline: none; max-width: 220px; appearance: none; padding-right: 2px; cursor: pointer; }
 .field-input { width: 100%; height: 40px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--sep); background: rgba(255, 255, 255, .85); outline: none; }
 .field-input:focus { border-color: var(--blue); box-shadow: 0 0 0 4px var(--blue-soft); }
 textarea.field-input { height: auto; padding: 10px 14px; resize: vertical; }
@@ -260,3 +260,29 @@ textarea.field-input { height: auto; padding: 10px 14px; resize: vertical; }
 .heat-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 14px; font-size: 12.5px; min-height: 20px; }
 .heat-legend { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; }
 .heat-legend i { width: 120px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, color-mix(in srgb, var(--blue) 8%, transparent), var(--blue)); }
+
+/* 下拉选择：触发按钮像表单行右侧的值，菜单是毛玻璃卡片 */
+.select-btn {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 240px; height: 30px; padding: 0 8px 0 10px; margin-right: -6px;
+  border: 0; border-radius: 9px; background: transparent; color: var(--ink-2); font-size: 14px; cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.select-btn > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.select-btn:hover, .select-btn.open { background: var(--track); color: var(--ink); }
+.select-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--blue-glow); }
+.select-caret { color: var(--muted); flex: none; }
+.select-menu {
+  position: fixed; z-index: 60; overflow-y: auto; padding: 6px; border-radius: 14px; outline: none;
+  background: var(--glass-menu); border: 1px solid var(--edge);
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); box-shadow: var(--shadow);
+}
+.select-group { padding: 8px 10px 4px 34px; font-size: 11.5px; color: var(--muted); }
+.select-group:not(:first-child) { margin-top: 4px; border-top: 1px solid var(--sep); padding-top: 10px; }
+.select-opt { display: flex; align-items: center; gap: 4px; min-height: 34px; padding: 6px 10px 6px 6px; border-radius: 9px; font-size: 14px; color: var(--ink); cursor: pointer; }
+.select-opt.active { background: var(--blue-soft); }
+.select-opt.selected { color: var(--blue); font-weight: 600; }
+.select-check { width: 24px; flex: none; display: inline-grid; place-items: center; color: var(--blue); }
+.select-label { display: flex; flex-direction: column; min-width: 0; }
+.select-label small { font-size: 11.5px; font-weight: 400; color: var(--muted); }
+.select-capsule { gap: 4px; padding-right: 2px; color: var(--ink); }
+.select-capsule .select-btn { height: 22px; font-size: 12.5px; margin-right: 0; padding: 0 4px 0 6px; }

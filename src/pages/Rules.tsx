@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { LINKS, call, fmtTime, openExternal, type Rule, type RuleAction, type Snapshot, type Template } from "../api";
+import { LINKS, call, fmtTime, openExternal, regionOptions, type Rule, type RuleAction, type Snapshot, type Template } from "../api";
 import { Icon, type IconName } from "../icons";
-import { Btn, ConfirmButton, FormRow, Group, Page, Row, Segmented, Sheet, Stepper, Switch, numOrNull, stagger, useAction, useRefData } from "../ui";
+import { Btn, ConfirmButton, FormRow, Group, Page, Row, Segmented, Select, Sheet, Stepper, Switch, numOrNull, stagger, useAction, useRefData } from "../ui";
 
 const blank = (): Rule => ({
   id: 0, name: "", enabled: true, region_sign: "westDC3", gpu_keyword: "", min_idle: 1, cuda_v_from: null,
@@ -103,9 +103,7 @@ export default function RulesPage({ snap }: { snap: Snapshot | null }) {
             <div className="group-label">条件</div>
             <Group>
               <FormRow icon="pin" label="区域">
-                <select className="inline-select" value={edit.region_sign} onChange={(e) => set("region_sign", e.target.value)}>
-                  {ref?.regions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
+                <Select label="区域" value={edit.region_sign} onChange={(v) => set("region_sign", v)} options={regionOptions(ref?.regions ?? [])} />
               </FormRow>
               <FormRow icon="gpu_s" label="卡型关键字">
                 <input className="inline-input" value={edit.gpu_keyword} placeholder="如 4090" onChange={(e) => set("gpu_keyword", e.target.value)} />
@@ -132,14 +130,12 @@ export default function RulesPage({ snap }: { snap: Snapshot | null }) {
                 <span className="muted" style={{ marginLeft: 6 }}>元/时</span>
               </FormRow>
               <FormRow icon="cube" label="最低 CUDA">
-                <select className="inline-select" value={edit.cuda_v_from ?? ""} onChange={(e) => set("cuda_v_from", numOrNull(e.target.value))}>
-                  {CUDA.map((c) => <option key={c ?? "none"} value={c ?? ""}>{c == null ? "不限" : (c / 10).toFixed(1)}</option>)}
-                </select>
+                <Select label="最低 CUDA" value={edit.cuda_v_from} onChange={(v) => set("cuda_v_from", v)}
+                  options={CUDA.map((c) => ({ value: c, label: c == null ? "不限" : `CUDA ${(c / 10).toFixed(1)}`, sub: c == null ? undefined : "机器驱动支持的最高版本不低于它" }))} />
               </FormRow>
               <FormRow icon="timer" label="冷却时间">
-                <select className="inline-select" value={edit.cooldown_minutes} onChange={(e) => set("cooldown_minutes", Number(e.target.value))}>
-                  {COOLDOWN.map((m) => <option key={m} value={m}>{m === 0 ? "不冷却" : `${m} 分钟`}</option>)}
-                </select>
+                <Select label="冷却时间" value={edit.cooldown_minutes} onChange={(v) => set("cooldown_minutes", v)}
+                  options={COOLDOWN.map((m) => ({ value: m, label: m === 0 ? "不冷却" : m >= 60 ? `${m / 60} 小时` : `${m} 分钟`, sub: m === 0 ? "每次查询有卡都提醒" : undefined }))} />
               </FormRow>
             </Group>
 
@@ -151,10 +147,8 @@ export default function RulesPage({ snap }: { snap: Snapshot | null }) {
                 <Group style={{ marginTop: 12 }}>
                   {edit.action === "create" ? (
                     <FormRow icon="doc" label="创建模板">
-                      <select className="inline-select" value={edit.template_id ?? ""} onChange={(e) => set("template_id", numOrNull(e.target.value))}>
-                        <option value="">请选择</option>
-                        {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                      </select>
+                      <Select label="创建模板" value={edit.template_id} onChange={(v) => set("template_id", v)} placeholder={templates.length ? "请选择" : "还没有模板"}
+                        options={templates.map((t) => ({ value: t.id as number | null, label: t.name }))} />
                     </FormRow>
                   ) : (
                     <FormRow icon="server" label="实例 ID">

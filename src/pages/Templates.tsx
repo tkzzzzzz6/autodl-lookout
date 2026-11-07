@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { LINKS, call, openExternal, type Template } from "../api";
-import { Btn, ConfirmButton, FormRow, Group, Page, Row, Sheet, Stepper, stagger, useAction, useRefData, useToast } from "../ui";
+import { Btn, ConfirmButton, FormRow, Group, Page, Row, Select, Sheet, Stepper, stagger, useAction, useRefData, useToast } from "../ui";
 
 const blank = (): Template => ({
   id: 0, name: "", gpu_spec_uuid: "5090-p", gpu_amount: 1, data_center_list: [],
@@ -74,9 +74,8 @@ export default function TemplatesPage({ hasToken }: { hasToken: boolean }) {
             <div className="group-label">硬件</div>
             <Group>
               <FormRow icon="gpu_s" label="卡型">
-                <select className="inline-select" value={edit.gpu_spec_uuid} onChange={(e) => set("gpu_spec_uuid", e.target.value)}>
-                  {ref?.gpu_specs.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
+                <Select label="卡型" value={edit.gpu_spec_uuid} onChange={(v) => set("gpu_spec_uuid", v)}
+                  options={(ref?.gpu_specs ?? []).map((o) => ({ value: o.value, label: o.label }))} />
               </FormRow>
               <FormRow icon="number" label="卡数"><Stepper value={edit.gpu_amount} min={1} max={4} unit="张" onChange={(v) => set("gpu_amount", v)} /></FormRow>
               <FormRow icon="box" label="扩容系统盘"><Stepper value={edit.expand_disk_gb} min={0} max={500} step={10} unit="GB" onChange={(v) => set("expand_disk_gb", v)} /></FormRow>
@@ -88,9 +87,8 @@ export default function TemplatesPage({ hasToken }: { hasToken: boolean }) {
                 <datalist id="images">{ref?.base_images.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</datalist>
               </FormRow>
               <FormRow icon="cube" label="最低 CUDA">
-                <select className="inline-select" value={edit.cuda_v_from} onChange={(e) => set("cuda_v_from", Number(e.target.value))}>
-                  {CUDA.map((c) => <option key={c} value={c}>{(c / 10).toFixed(1)}</option>)}
-                </select>
+                <Select label="最低 CUDA" value={edit.cuda_v_from} onChange={(v) => set("cuda_v_from", v)}
+                  options={CUDA.map((c) => ({ value: c, label: `CUDA ${(c / 10).toFixed(1)}` }))} />
               </FormRow>
             </Group>
             <div className="group-foot">{image(edit.image_uuid)}。也可以直接填私有镜像的 image_uuid。</div>

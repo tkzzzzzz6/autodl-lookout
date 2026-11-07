@@ -95,6 +95,13 @@ export const gpuAlias = (name: string) => GPU_ALIAS[name];
 
 export const isGpu = (name: string) => !/^CPU/i.test(name);
 
+/** 区域下拉分组：专区 / 企业区和常规区域分开，方便扫读 */
+export function regionOptions(regions: Opt[]) {
+  const special = (l: string) => /专区|企业区/.test(l);
+  return [...regions.filter((o) => !special(o.label)), ...regions.filter((o) => special(o.label))]
+    .map((o) => ({ value: o.value, label: o.label, group: special(o.label) ? "专区" : "常规区域" }));
+}
+
 export const LINKS = {
   devToken: "https://www.autodl.com/console/center/settings/token",
   proDocs: "https://www.autodl.com/docs/instance_pro_api/",
