@@ -13,14 +13,43 @@ const regionsRef = [
 ];
 
 let settings: Settings = {
-  poll_interval_secs: 60, regions: ["westDC3", "beijingDC2"], low_balance_yuan: 20,
-  long_running_hours: 8, auto_min_balance_yuan: 10, history_keep_days: 14,
+  poll_interval_secs: 60, regions: ["beijingDC3", "neimengDC2", "foshanDC1", "beijingDC2"], low_balance_yuan: 20,
+  long_running_hours: 8, auto_min_balance_yuan: 10, history_keep_days: 14, watch_models: ["A100", "V100", "A800"],
 };
 
 // 机房代码来自真实的 region/list：西北B区第一个机房 west-B，北京B区 bj-B1
 const MKT: Record<string, string> = {
   westDC3: "https://www.autodl.com/market/list?region=west-B",
   beijingDC2: "https://www.autodl.com/market/list?region=bj-B1",
+  beijingDC3: "https://www.autodl.com/market/list?region=bj-C1",
+  neimengDC2: "https://www.autodl.com/market/list?region=nm-A1",
+  foshanDC1: "https://www.autodl.com/market/list?region=fs-A1",
+};
+
+// 各区的假库存；快照只返回设置里勾选的区域
+const STOCK: Record<string, { name: string; items: { gpu_name: string; idle: number; total: number }[] }> = {
+  westDC3: { name: "西北B区", items: [
+    { gpu_name: "vGPU-32GB", idle: 103, total: 2528 }, { gpu_name: "RTX 3080 Ti", idle: 60, total: 376 },
+    { gpu_name: "RTX 4090", idle: 50, total: 1766 }, { gpu_name: "RTX 4090D", idle: 27, total: 1048 },
+    { gpu_name: "vGPU-48GB", idle: 9, total: 970 }, { gpu_name: "RTX 6000D", idle: 7, total: 456 },
+    { gpu_name: "RTX 5090", idle: 2, total: 2048 }, { gpu_name: "H800", idle: 1, total: 96 },
+    { gpu_name: "RTX 5090 D", idle: 0, total: 240 }, { gpu_name: "RTX PRO 6000", idle: 0, total: 1588 },
+  ] },
+  beijingDC2: { name: "北京B区", items: [
+    { gpu_name: "RTX 3080 Ti", idle: 21, total: 392 }, { gpu_name: "A100-SXM4-80GB", idle: 4, total: 160 },
+    { gpu_name: "RTX A4000", idle: 6, total: 24 }, { gpu_name: "RTX 5090", idle: 3, total: 980 },
+    { gpu_name: "RTX 4090", idle: 0, total: 940 }, { gpu_name: "RTX 4090D", idle: 0, total: 512 },
+  ] },
+  beijingDC3: { name: "V100专区", items: [
+    { gpu_name: "Tesla V100-SXM2-32GB", idle: 18, total: 320 }, { gpu_name: "V100-SXM2-16GB", idle: 0, total: 64 },
+  ] },
+  neimengDC2: { name: "A800专区", items: [
+    { gpu_name: "A800-SXM4-80GB", idle: 0, total: 512 }, { gpu_name: "A100-SXM4-80GB", idle: 2, total: 96 },
+  ] },
+  foshanDC1: { name: "佛山区", items: [
+    { gpu_name: "RTX 4090", idle: 12, total: 600 }, { gpu_name: "A100-PCIE-40GB", idle: 3, total: 48 },
+    { gpu_name: "A800-SXM4-80GB", idle: 5, total: 80 }, { gpu_name: "RTX 3090", idle: 30, total: 410 },
+  ] },
 };
 const ruleUrl = (id: number) => MKT[rules.find((r) => r.id === id)?.region_sign ?? ""] ?? "https://www.autodl.com/market/list";
 let rules: Rule[] = [
@@ -41,20 +70,9 @@ let tick = 0;
 const snapshot = (): Snapshot => ({
   has_token: true, has_web_token: true, web_token_exp: now() + 59 * 86400, paused: false, running: false, last_run_at: now() - 12, next_run_at: now() + 48,
   last_error: null, interval_secs: 60,
-  regions: [
-    { region: "westDC3", region_name: "西北B区", error: null, market_url: MKT.westDC3, items: [
-      { gpu_name: "vGPU-32GB", idle: 103, total: 2528 }, { gpu_name: "RTX 3080 Ti", idle: 60, total: 376 },
-      { gpu_name: "RTX 4090", idle: 50, total: 1766 }, { gpu_name: "RTX 4090D", idle: 27, total: 1048 },
-      { gpu_name: "vGPU-48GB", idle: 9, total: 970 }, { gpu_name: "RTX 6000D", idle: 7, total: 456 },
-      { gpu_name: "RTX 5090", idle: 2, total: 2048 }, { gpu_name: "H800", idle: 1, total: 96 },
-      { gpu_name: "RTX 5090 D", idle: 0, total: 240 }, { gpu_name: "RTX PRO 6000", idle: 0, total: 1588 },
-    ] },
-    { region: "beijingDC2", region_name: "北京B区", error: null, market_url: MKT.beijingDC2, items: [
-      { gpu_name: "RTX 3080 Ti", idle: 21, total: 392 }, { gpu_name: "RTX A4000", idle: 6, total: 24 },
-      { gpu_name: "RTX 5090", idle: 3, total: 980 }, { gpu_name: "RTX 4090", idle: 0, total: 940 },
-      { gpu_name: "RTX 4090D", idle: 0, total: 512 },
-    ] },
-  ],
+  regions: settings.regions.filter((r) => STOCK[r]).map((r) => ({
+    region: r, region_name: STOCK[r].name, error: null, market_url: MKT[r] ?? "https://www.autodl.com/market/list", items: STOCK[r].items.map((i) => ({ ...i })),
+  })),
   rules: [
     { rule_id: 1, hit: true, idle_sum: 77, machines: null, matched: ["RTX 4090×50", "RTX 4090D×27"], error: null, market_url: ruleUrl(1) },
     { rule_id: 2, hit: true, idle_sum: 2, machines: null, matched: ["RTX 5090×2"], error: null, market_url: ruleUrl(2) },
@@ -104,8 +122,11 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       const sn = snapshot();
       tick++;
       // 浏览器预览里每次刷新让数字变一点，方便看动效
-      sn.regions[0].items[2].idle = 50 + ((tick * 7) % 13) - 6;
-      sn.regions[1].items[3].idle = tick % 3 === 0 ? 2 : 0;
+      const find = (r: string, g: string) => sn.regions.find((x) => x.region === r)?.items.find((i) => i.gpu_name === g);
+      const a = find("foshanDC1", "RTX 4090") ?? find("westDC3", "RTX 4090");
+      if (a) a.idle = 12 + ((tick * 7) % 13) - 6;
+      const b = find("beijingDC2", "RTX 5090");
+      if (b) b.idle = tick % 3 === 0 ? 2 : 0;
       return sn;
     },
     ref_data: () => ({
