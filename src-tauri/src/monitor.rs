@@ -8,7 +8,7 @@ use chrono::{Local, TimeZone};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Notify;
@@ -164,6 +164,8 @@ pub struct Monitor {
     pub prices: crate::price::PriceCache,
     /// SSH 连接池（服务器页的测试连接、推送公钥、状态采集共用）
     pub ssh: crate::ssh::SshPool,
+    /// 服务器提醒的状态：id → (提醒状态, 下次可以采集的时间, 当前退避秒数)
+    watch_state: Mutex<HashMap<String, (crate::serverstat::WatchState, i64, i64)>>,
 }
 
 pub type QKey = (String, Option<i64>, Option<i64>, i64, String);
@@ -183,6 +185,7 @@ impl Monitor {
             last_prune: RwLock::new(0),
             prices: Default::default(),
             ssh,
+            watch_state: Mutex::new(HashMap::new()),
         })
     }
 
@@ -255,6 +258,69 @@ impl Monitor {
                 }
             }
         });
+    }
+
+    /// 服务器提醒：每 60 秒采集开了提醒的服务器（空闲 / 训练结束 / 磁盘），单台出错时指数退避到 10 分钟
+    pub fn spawn_server_watch(self: &Arc<Self>, app: AppHandle) {
+        let me = self.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                me.server_watch_round(&app).await;
+            }
+        });
+    }
+
+    pub fn reset_watch_state(&self, id: &str) {
+        self.watch_state.lock().unwrap().remove(id);
+    }
+
+    async fn server_watch_round(&self, app: &AppHandle) {
+        use crate::serverstat::{command, evaluate, parse, Watch};
+        let watches: Vec<Watch> = self.store.kv_prefix("watch:").unwrap_or_default().into_iter()
+            .filter_map(|(_, v)| serde_json::from_str::<Watch>(&v).ok()).filter(|w| w.any()).collect();
+        if watches.is_empty() {
+            return;
+        }
+        let market = self.market();
+        let insts = match (&market, watches.iter().any(|w| w.id.starts_with("autodl:"))) {
+            (Some(m), true) => m.instances().await.unwrap_or_default(),
+            _ => vec![],
+        };
+        let saved = self.store.servers().unwrap_or_default();
+        let views = crate::servers::views(&self.store, &insts, &saved, &[]);
+        let ts = now();
+        for w in watches {
+            let Some(v) = views.iter().find(|v| v.id == w.id) else { continue };
+            let (prev, next_try, delay) = self.watch_state.lock().unwrap().get(&w.id).cloned().unwrap_or_default();
+            if ts < next_try {
+                continue;
+            }
+            let autodl_running = v.kind == "autodl" && v.status.as_deref() == Some("running");
+            if v.kind == "autodl" && !autodl_running {
+                // 关机的实例不采集，也不保留空闲计时
+                self.watch_state.lock().unwrap().insert(w.id.clone(), Default::default());
+                continue;
+            }
+            match crate::servers::exec(&self.store, &self.ssh, market.as_ref(), v, &command(Some(&w))).await {
+                Ok(out) => {
+                    let st = parse(&out.stdout, ts, Some(&w));
+                    let (next, alerts) = evaluate(&prev, &st, &w, &v.name, autodl_running, ts);
+                    for a in alerts {
+                        self.log("warn", "server", None, &format!("{}：{}", a.title, a.body));
+                        crate::notify::send(app, &a.title, &a.body);
+                    }
+                    self.watch_state.lock().unwrap().insert(w.id.clone(), (next, 0, 0));
+                }
+                Err(e) => {
+                    let d = if delay == 0 { 120 } else { (delay * 2).min(600) };
+                    if delay == 0 {
+                        self.log("warn", "server", None, &format!("采集 {} 的状态失败，{} 秒后重试：{e}", v.name, d));
+                    }
+                    self.watch_state.lock().unwrap().insert(w.id.clone(), (prev, ts + d, d));
+                }
+            }
+        }
     }
 
     /// data_center（westDC3 …）→ 机房列表，区域表每小时刷新一次

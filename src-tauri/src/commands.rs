@@ -408,34 +408,12 @@ async fn find_server(st: &State<'_, AppState>, id: &str) -> R<ServerView> {
 }
 
 async fn server_password_inner(st: &State<'_, AppState>, v: &ServerView) -> R<Option<String>> {
-    if let Some(uuid) = v.id.strip_prefix("autodl:") {
-        if !v.has_password {
-            return Ok(None);
-        }
-        return market(st)?.instance_password(uuid).await.map(Some).map_err(s);
-    }
-    let id: i64 = v.id.trim_start_matches("srv:").parse().map_err(s)?;
-    Ok(crate::secret::load_server_password(&st.store, id))
+    servers::password(&st.store, st.monitor.market().as_ref(), v).await
 }
 
 /// 连接：推过公钥的先只用密钥，失败（比如实例重建过）再带上密码重试；主机密钥变化的错误直接返回
 async fn ssh_exec(st: &State<'_, AppState>, v: &ServerView, cmd: &str) -> R<crate::ssh::ExecOut> {
-    if v.host.is_empty() {
-        return Err("这台实例还没有 SSH 信息（可能还没开机）".into());
-    }
-    let pool = &st.monitor.ssh;
-    if v.key_pushed || v.auth == "key" {
-        match pool.exec(&servers::target(v, None), cmd).await {
-            Ok(o) => return Ok(o),
-            Err(e) if e.starts_with(crate::ssh::HOSTKEY_CHANGED) => return Err(e),
-            Err(e) if v.auth == "key" && !v.has_password => return Err(e),
-            Err(_) => {}
-        }
-    }
-    let pw = server_password_inner(st, v).await?;
-    let t = servers::target(v, pw);
-    pool.forget(&t).await;
-    pool.exec(&t, cmd).await
+    servers::exec(&st.store, &st.monitor.ssh, st.monitor.market().as_ref(), v, cmd).await
 }
 
 fn validate_server(sv: &Server) -> R<()> {
@@ -626,6 +604,44 @@ pub async fn trust_host_key(st: State<'_, AppState>, id: String) -> R<()> {
     let v = find_server(&st, &id).await?;
     st.store.kv_set(&crate::ssh::hostkey_kv(&v.host, v.port as u16), "")?;
     let _ = st.store.log(now(), "warn", "server", None, &format!("信任了 {}:{} 的新主机密钥", v.host, v.port));
+    Ok(())
+}
+
+// ---------- 服务器状态和提醒 ----------
+
+use crate::serverstat::{ServerStatus, Watch};
+
+fn load_watch(st: &State<'_, AppState>, id: &str) -> Watch {
+    st.store.kv_get(&format!("watch:{id}")).ok().flatten()
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_else(|| Watch::new(id))
+}
+
+/// 点开服务器时采集一次状态（界面开着时 30 秒刷新）
+#[tauri::command]
+pub async fn server_status(st: State<'_, AppState>, id: String) -> R<ServerStatus> {
+    let v = find_server(&st, &id).await?;
+    let w = load_watch(&st, &id);
+    let out = ssh_exec(&st, &v, &crate::serverstat::command(Some(&w))).await?;
+    Ok(crate::serverstat::parse(&out.stdout, now(), Some(&w)))
+}
+
+#[tauri::command]
+pub fn get_server_watch(st: State<'_, AppState>, id: String) -> Watch {
+    load_watch(&st, &id)
+}
+
+#[tauri::command]
+pub fn save_server_watch(st: State<'_, AppState>, watch: Watch) -> R<()> {
+    let mut w = watch;
+    w.idle_minutes = w.idle_minutes.clamp(5, 24 * 60);
+    w.job_quiet_minutes = w.job_quiet_minutes.clamp(1, 24 * 60);
+    w.job_log = w.job_log.map(|l| l.trim().to_string()).filter(|l| !l.is_empty());
+    if w.job_pid.is_some_and(|p| p <= 0) {
+        return Err("PID 要是正整数".into());
+    }
+    st.store.kv_set(&format!("watch:{}", w.id), &serde_json::to_string(&w).map_err(s)?)?;
+    st.monitor.reset_watch_state(&w.id);
     Ok(())
 }
 

@@ -7,6 +7,7 @@ mod notify;
 pub mod price;
 pub mod regions;
 pub mod servers;
+pub mod serverstat;
 pub mod ssh;
 pub mod sshconfig;
 pub mod terminal;
@@ -44,6 +45,7 @@ pub fn run() {
 
             tray::build(app.handle())?;
             monitor.spawn(app.handle().clone());
+            monitor.spawn_server_watch(app.handle().clone());
 
             // 开机自启时带 --minimized，直接藏到托盘
             if std::env::args().any(|a| a == "--minimized") {
@@ -100,6 +102,9 @@ pub fn run() {
             commands::ensure_ssh_key,
             commands::push_ssh_key,
             commands::trust_host_key,
+            commands::server_status,
+            commands::get_server_watch,
+            commands::save_server_watch,
             commands::list_regular_instances,
             commands::regular_instance_password,
             commands::regular_power_on,
