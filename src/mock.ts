@@ -175,7 +175,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     sync_ssh_config: () => { sshSynced = true; return { changed: true, count: 4, path: "C:\\Users\\you\\.ssh\\config" }; },
     set_ssh_auto_sync: () => { autoSync = !!a.on; },
     open_terminal: () => {},
-    vscode_url: () => { if (!sshSynced) throw "NEED_SYNC|VS Code 要通过 SSH 配置里的名字连接，先点「同步到 SSH 配置」"; return "vscode://vscode-remote/ssh-remote+x/root"; },
+    open_vscode: () => { if (!sshSynced) throw "NEED_SYNC|VS Code 要通过 SSH 配置里的名字连接，先点「同步到 SSH 配置」"; },
     server_password: () => "xxxxxx",
     test_server: () => (a.id === "srv:2"
       ? (() => { throw "HOSTKEY_CHANGED:SHA256:fake|47.100.12.9:22 的主机密钥和上次连接时不一样。AutoDL 实例换了机器或重装系统时会这样，也可能是有人冒充。确认没问题后可以信任新的密钥。"; })()

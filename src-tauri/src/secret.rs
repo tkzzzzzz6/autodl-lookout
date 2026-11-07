@@ -71,27 +71,24 @@ pub fn clear(store: &Store, k: Kind) {
     let _ = store.kv_set(k.fallback_key(), "");
 }
 
-/// 自己的 SSH 服务器的密码：钥匙串里的账户名是 `server-<id>`，钥匙串不可用时退回数据库
-pub fn load_server_password(store: &Store, id: i64) -> Option<String> {
-    let user = format!("server-{id}");
-    if let Some(t) = keyring::Entry::new(SERVICE, &user).ok().and_then(|e| e.get_password().ok()) {
-        if !t.is_empty() {
-            return Some(t);
-        }
-    }
-    store.kv_get(&format!("{user}_fallback")).ok().flatten().filter(|t| !t.is_empty())
+/// 自己的 SSH 服务器的密码：只存系统钥匙串（账户名 `server-<id>`）。
+/// 和网页凭证不同，钥匙串不可用时**不**退回数据库：服务器密码明文进 SQLite 会随数据库备份、拷贝泄露。
+pub fn load_server_password(_store: &Store, id: i64) -> Option<String> {
+    keyring::Entry::new(SERVICE, &format!("server-{id}")).ok()
+        .and_then(|e| e.get_password().ok())
+        .filter(|t| !t.is_empty())
 }
 
-pub fn save_server_password(store: &Store, id: i64, password: &str) -> Result<bool, String> {
-    let user = format!("server-{id}");
-    if let Ok(e) = keyring::Entry::new(SERVICE, &user) {
-        if e.set_password(password).is_ok() && e.get_password().ok().as_deref() == Some(password) {
-            let _ = store.kv_set(&format!("{user}_fallback"), "");
-            return Ok(true);
-        }
+pub fn save_server_password(_store: &Store, id: i64, password: &str) -> Result<(), String> {
+    let e = keyring::Entry::new(SERVICE, &format!("server-{id}"))
+        .map_err(|e| format!("系统钥匙串不可用（{e}），没法安全保存密码。可以改用私钥登录：选「私钥」保存后点「推送公钥」"))?;
+    e.set_password(password)
+        .map_err(|e| format!("写入系统钥匙串失败（{e}），密码没有保存。可以改用私钥登录：选「私钥」保存后点「推送公钥」"))?;
+    if e.get_password().ok().as_deref() != Some(password) {
+        let _ = e.delete_credential();
+        return Err("系统钥匙串读不回刚写的密码，密码没有保存。可以改用私钥登录".into());
     }
-    store.kv_set(&format!("{user}_fallback"), password)?;
-    Ok(false)
+    Ok(())
 }
 
 pub fn clear_server_password(store: &Store, id: i64) {
