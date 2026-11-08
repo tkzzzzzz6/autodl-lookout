@@ -1,0 +1,118 @@
+# 发版：推送 v* tag（如 v0.1.0）后打包 Windows / macOS 安装包，挂到一个草稿 Release 上。
+# 维护者在 GitHub 上看过草稿、确认安装包能用后，手动点「Publish release」。
+# 步骤见 README 的「发版」。
+name: 发版
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要打包的 tag（如 v0.1.0），必须已经推送到 GitHub"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  # 检查版本号，建（或找到）草稿 Release，后面三个打包任务都往这一个上挂，避免并发时建出好几个
+  prepare:
+    name: 检查版本号、建草稿 Release
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.release.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: tag 和三处版本号一致
+        run: node scripts/version.mjs check "$TAG"
+      - name: 建草稿 Release
+        id: release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = process.env.TAG;
+            const { owner, repo } = context.repo;
+            // 重跑时复用已有的 Release（草稿用 getReleaseByTag 查不到，所以翻列表）
+            const all = await github.paginate(github.rest.repos.listReleases, { owner, repo, per_page: 100 });
+            const found = all.find((r) => r.tag_name === tag);
+            if (found) {
+              if (!found.draft) core.setFailed(`${tag} 已经发布过了，不要覆盖已发布的安装包。要重新发就换一个版本号。`);
+              return found.id;
+            }
+            const body = [
+              "## 下载",
+              "",
+              "| 系统 | 文件 |",
+              "|---|---|",
+              "| Windows 10 / 11（推荐） | `AutoDL.Lookout_*_x64-setup.exe` |",
+              "| Windows（批量部署） | `AutoDL.Lookout_*_x64_en-US.msi` |",
+              "| macOS（Apple 芯片 M1–M4） | `AutoDL.Lookout_*_aarch64.dmg` |",
+              "| macOS（Intel） | `AutoDL.Lookout_*_x64.dmg` |",
+              "",
+              "安装包没有代码签名：",
+              "- Windows 第一次运行如果弹出「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」",
+              "- macOS 提示「无法打开」时，在「系统设置 → 隐私与安全性」里点「仍要打开」",
+              "",
+            ].join("\n");
+            const { data } = await github.rest.repos.createRelease({
+              owner, repo, tag_name: tag, name: `显卡管家 ${tag}`, body,
+              draft: true, prerelease: false, generate_release_notes: true,
+            });
+            return data.id;
+
+  build:
+    name: 打包（${{ matrix.name }}）
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            args: ""
+            targets: ""
+          - name: macOS Apple 芯片
+            os: macos-latest
+            args: "--target aarch64-apple-darwin"
+            targets: aarch64-apple-darwin
+          - name: macOS Intel
+            os: macos-latest
+            args: "--target x86_64-apple-darwin"
+            targets: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.targets || 'native' }}
+      - run: npm ci
+      - name: 打包并上传到草稿 Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          args: ${{ matrix.args }}

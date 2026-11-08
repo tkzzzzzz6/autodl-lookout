@@ -1,0 +1,19 @@
+# GitHub 自动生成 Release 说明时按 PR 的 label 分组（发版 workflow 建草稿时 generate_release_notes: true）
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+      - duplicate
+      - invalid
+      - wontfix
+  categories:
+    - title: ⚠️ 破坏性变更
+      labels: [breaking-change]
+    - title: ✨ 新功能
+      labels: [enhancement]
+    - title: 🐛 修复
+      labels: [bug]
+    - title: 📝 文档
+      labels: [documentation]
+    - title: 其他
+      labels: ["*"]
