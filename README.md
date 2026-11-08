@@ -3,6 +3,12 @@
 基于 AutoDL 开放 API 的桌面工具（Tauri 2 + Rust + React）：
 监控各区域空闲显卡、有卡时发系统通知（可选自动创建 / 开机 Pro 实例）、管理普通容器实例和容器实例 Pro、余额和长时间运行提醒。
 
+![显卡管家：库存页](docs/screenshots/stock.webp)
+
+<p align="center"><img src="docs/screenshots/demo.gif" width="800" alt="操作演示：点开卡型看实时价格 → 抢卡时段 → 服务器实时状态"></p>
+
+<p align="center"><sub>以上画面都是演示模式（<code>npm run demo</code>）的假数据。</sub></p>
+
 ## 下载
 
 到 [Releases](https://github.com/tkzzzzzz6/autodl-lookout/releases) 下载安装包：
@@ -53,6 +59,21 @@ npm run tauri build    # 打包安装包（Windows 是 .msi / .exe，macOS 是 .
 | 创建模板 | 卡型、卡数、镜像、CUDA、系统盘、开机命令，一键创建 |
 | 日志 | 提醒、自动动作、手动操作记录 |
 | 设置 | Token、看板区域（默认 V100专区、A800专区、佛山区、北京B区）、关注卡型、轮询间隔、余额提醒线、自动动作余额下限、运行时长提醒、开机自启 |
+
+### 界面一览
+
+| | |
+|---|---|
+| ![库存：点开卡型看实时单价和分档](docs/screenshots/stock.webp) | ![提醒规则](docs/screenshots/rules.webp) |
+| **库存**：各区空闲卡数，点开看实时单价、分档，直接租用 | **提醒规则**：区域 + 卡型 + 门槛，有卡就通知 |
+| ![抢卡时段热力图](docs/screenshots/analysis.webp) | ![我的实例](docs/screenshots/instances.webp) |
+| **抢卡时段**：按星期 × 小时看什么时候最容易有卡 | **我的实例**：开关机、复制 SSH 和密码 |
+| ![服务器列表](docs/screenshots/servers.webp) | ![服务器实时状态](docs/screenshots/server-live.webp) |
+| **服务器**：AutoDL 实例和自己的服务器放在一起，列表直接看 GPU 占用 | **服务器详情**：每 2 秒刷新，最近几分钟的曲线 |
+| ![设置](docs/screenshots/settings.webp) | |
+| **设置**：凭证、看板区域、关注卡型、提醒线 | |
+
+截图用 `scripts/screenshots.mjs` 生成（说明见脚本开头），界面改了可以重新跑一遍。
 
 关闭窗口会留在菜单栏继续监控（菜单栏图标旁的数字 = 当前有卡的规则数）。
 
@@ -118,19 +139,39 @@ src/
 
 推送 `v*` tag 后，GitHub Actions（`.github/workflows/release.yml`）会打包 Windows（`.exe`、`.msi`）、macOS（Apple 芯片、Intel 各一个 `.dmg`）和 Linux x64（`.deb`、`.rpm`、`.AppImage`），所有平台都打包成功后**直接发布**到 Releases（设为 Latest），说明按 PR 的 label 自动分组（`.github/release.yml`）；有一个平台失败就停在草稿，不会发出缺安装包的版本。
 
-1. 开一个 PR 改版本号，合并到 main：
-   ```bash
-   npm run version:set -- 0.2.0   # 同时改 package.json、Cargo.toml、tauri.conf.json（和两个 lock 文件）
-   ```
-2. 在 main 最新的提交上打 tag 并推送：
+**顺序很重要：先改版本号并合并到 main，再打 tag。** 发版时会检查 tag 和版本号是否一致（`v0.2.0` 对应版本号 `0.2.0`），对不上会直接失败。
+
+1. **改版本号**：从 main 拉一个分支，改版本号，开 PR 合并到 main（PR 打 `ignore-for-release` label，不进更新说明）：
    ```bash
    git checkout main && git pull
+   git checkout -b chore/bump-0.2.0
+   npm run version:set -- 0.2.0   # 同时改 package.json、Cargo.toml、tauri.conf.json 和两个 lock 文件
+   git commit -am "chore: 版本号改成 0.2.0"
+   git push origin chore/bump-0.2.0   # 然后在 GitHub 上开 PR、合并
+   ```
+2. **打 tag**：PR 合并后，在 main 最新的提交上打 tag 并推送：
+   ```bash
+   git checkout main && git pull
+   npm run version:check          # 确认版本号已经是 0.2.0
    git tag v0.2.0
    git push origin v0.2.0
    ```
-3. 等 Actions 里的「发版」跑完（大约 15–25 分钟），Releases 页面就有新版本了。失败时到 Actions 看是哪个平台、什么错，修好后在失败的运行里点「Re-run failed jobs」，会接着用原来的草稿。
+3. **等发布**：Actions 里的「发版」跑完（大约 15–25 分钟），Releases 页面就有新版本了。
 
-tag 和版本号对不上时 workflow 会直接失败；已经发布的版本不会被覆盖，要重发就换一个版本号。也可以在 Actions 页面手动运行「发版」，填一个已经推送的 tag。
+出问题时：
+
+- **tag 打早了**（版本号还没改，workflow 报「tag 和版本号对不上」）：什么都不会发布。按第 1 步改好版本号合并后，删掉旧 tag 重新打：
+  ```bash
+  git checkout main && git pull
+  git tag -d v0.2.0
+  git push origin :refs/tags/v0.2.0
+  git tag v0.2.0
+  git push origin v0.2.0
+  ```
+- **某个平台打包失败**：Release 停在草稿。到 Actions 看是哪个平台、什么错；偶发问题（网络等）在那次运行里点「Re-run failed jobs」，会接着用原来的草稿。要改代码才能修好的，先删掉这个草稿和 tag，修好合并后换一个新版本号重新发。
+- **已经发布的版本不会被覆盖**：发出去后发现问题，修好后发下一个版本号（如 `0.2.1`）。
+
+也可以在 Actions 页面手动运行「发版」，填一个已经推送的 tag。
 
 ## 参与贡献
 
