@@ -105,7 +105,7 @@ src/
 
 ## 发版
 
-推送 `v*` tag 后，GitHub Actions（`.github/workflows/release.yml`）会打包 Windows（`.exe`、`.msi`）和 macOS（Apple 芯片、Intel 各一个 `.dmg`），挂到一个**草稿** Release 上，说明按 PR 的 label 自动分组（`.github/release.yml`）。
+推送 `v*` tag 后，GitHub Actions（`.github/workflows/release.yml`）会打包 Windows（`.exe`、`.msi`）和 macOS（Apple 芯片、Intel 各一个 `.dmg`），三个平台都打包成功后**直接发布**到 Releases（设为 Latest），说明按 PR 的 label 自动分组（`.github/release.yml`）；有一个平台失败就停在草稿，不会发出缺安装包的版本。
 
 1. 开一个 PR 改版本号，合并到 main：
    ```bash
@@ -117,7 +117,7 @@ src/
    git tag v0.2.0
    git push origin v0.2.0
    ```
-3. 等 Actions 里的「发版」跑完（大约 15–25 分钟），到 Releases 打开草稿，下载安装包试一下，没问题点「Publish release」。
+3. 等 Actions 里的「发版」跑完（大约 15–25 分钟），Releases 页面就有新版本了。失败时到 Actions 看是哪个平台、什么错，修好后在失败的运行里点「Re-run failed jobs」，会接着用原来的草稿。
 
 tag 和版本号对不上时 workflow 会直接失败；已经发布的版本不会被覆盖，要重发就换一个版本号。也可以在 Actions 页面手动运行「发版」，填一个已经推送的 tag。
 
