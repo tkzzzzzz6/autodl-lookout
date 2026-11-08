@@ -1,5 +1,5 @@
-# 发版：推送 v* tag（如 v0.1.0）后打包 Windows / macOS 安装包，先挂到一个草稿 Release 上，
-# 三个平台全部打包成功后自动发布（设为 Latest）。有一个失败就停在草稿，修好后重跑会接着用这个草稿。
+# 发版：推送 v* tag（如 v0.1.0）后打包 Windows / macOS / Linux 安装包，先挂到一个草稿 Release 上，
+# 所有平台全部打包成功后自动发布（设为 Latest）。有一个失败就停在草稿，修好后重跑会接着用这个草稿。
 # 步骤见 README 的「发版」。
 name: 发版
 
@@ -23,7 +23,7 @@ env:
   TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
-  # 检查版本号，建（或找到）草稿 Release，后面三个打包任务都往这一个上挂，避免并发时建出好几个
+  # 检查版本号，建（或找到）草稿 Release，后面几个打包任务都往这一个上挂，避免并发时建出好几个
   prepare:
     name: 检查版本号、建草稿 Release
     runs-on: ubuntu-latest
@@ -61,10 +61,15 @@ jobs:
               "| Windows（批量部署） | `AutoDL.Lookout_*_x64_en-US.msi` |",
               "| macOS（Apple 芯片 M1–M4） | `AutoDL.Lookout_*_aarch64.dmg` |",
               "| macOS（Intel） | `AutoDL.Lookout_*_x64.dmg` |",
+              "| Linux：Debian / Ubuntu | `AutoDL.Lookout_*_amd64.deb` |",
+              "| Linux：Fedora / openSUSE | `AutoDL.Lookout-*.x86_64.rpm` |",
+              "| Linux：其他发行版（免安装） | `AutoDL.Lookout_*_amd64.AppImage`（下载后 `chmod +x` 再运行） |",
               "",
               "安装包没有代码签名：",
               "- Windows 第一次运行如果弹出「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」",
               "- macOS 提示「无法打开」时，在「系统设置 → 隐私与安全性」里点「仍要打开」",
+              "",
+              "Linux 需要桌面环境有系统托盘（GNOME 要装 AppIndicator 扩展）和钥匙串服务（gnome-keyring 或 KWallet），没有钥匙串时服务器密码存不了。",
               "",
             ].join("\n");
             const { data } = await github.rest.repos.createRelease({
@@ -92,11 +97,21 @@ jobs:
             os: macos-latest
             args: "--target x86_64-apple-darwin"
             targets: x86_64-apple-darwin
+          # 用较老的 Ubuntu 构建，glibc 版本低，能在更多发行版上运行
+          - name: Linux x64
+            os: ubuntu-22.04
+            args: ""
+            targets: ""
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+      - name: Linux 打包需要的系统库
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -117,7 +132,7 @@ jobs:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           args: ${{ matrix.args }}
 
-  # 三个平台都成功才会跑到这里（needs 里有失败就跳过），草稿 → 正式发布
+  # 所有平台都成功才会跑到这里（needs 里有失败就跳过），草稿 → 正式发布
   publish:
     name: 发布 Release
     needs: [prepare, build]
@@ -136,7 +151,8 @@ jobs:
               await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
             }
             const left = assets.filter((a) => !a.name.endsWith(".app.tar.gz")).map((a) => a.name);
-            const want = [/_x64-setup\.exe$/, /_x64_en-US\.msi$/, /_aarch64\.dmg$/, /_x64\.dmg$/];
+            const want = [/_x64-setup\.exe$/, /_x64_en-US\.msi$/, /_aarch64\.dmg$/, /_x64\.dmg$/,
+              /_amd64\.deb$/, /\.x86_64\.rpm$/, /_amd64\.AppImage$/];
             const missing = want.filter((re) => !left.some((n) => re.test(n)));
             if (missing.length) {
               core.setFailed(`安装包不全，先不发布（缺 ${missing.join("、")}），Release 保持草稿`);

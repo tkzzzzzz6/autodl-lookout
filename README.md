@@ -5,7 +5,18 @@
 
 ## 下载
 
-到 [Releases](https://github.com/tkzzzzzz6/autodl-lookout/releases) 下载安装包：Windows 用 `*_x64-setup.exe`，macOS 按芯片选 `*_aarch64.dmg`（Apple 芯片）或 `*_x64.dmg`（Intel）。
+到 [Releases](https://github.com/tkzzzzzz6/autodl-lookout/releases) 下载安装包：
+
+| 系统 | 文件 |
+|---|---|
+| Windows 10 / 11 | `*_x64-setup.exe`（批量部署用 `*.msi`） |
+| macOS | Apple 芯片 `*_aarch64.dmg`，Intel `*_x64.dmg` |
+| Linux（Debian / Ubuntu） | `*_amd64.deb`：`sudo apt install ./AutoDL.Lookout_*_amd64.deb` |
+| Linux（Fedora / openSUSE） | `*.x86_64.rpm`：`sudo dnf install ./AutoDL.Lookout-*.x86_64.rpm` |
+| Linux（其他发行版） | `*_amd64.AppImage`：`chmod +x` 后直接运行 |
+
+Linux 需要桌面环境有系统托盘（GNOME 要装 AppIndicator 扩展）和钥匙串服务（gnome-keyring 或 KWallet）；没有钥匙串时网页凭证会退回存在本地数据库，服务器密码存不了。
+
 安装包没有代码签名：Windows 首次运行弹出「Windows 已保护你的电脑」时点「更多信息 → 仍要运行」；macOS 提示无法打开时到「系统设置 → 隐私与安全性」点「仍要打开」。
 
 ## 运行
@@ -105,7 +116,7 @@ src/
 
 ## 发版
 
-推送 `v*` tag 后，GitHub Actions（`.github/workflows/release.yml`）会打包 Windows（`.exe`、`.msi`）和 macOS（Apple 芯片、Intel 各一个 `.dmg`），三个平台都打包成功后**直接发布**到 Releases（设为 Latest），说明按 PR 的 label 自动分组（`.github/release.yml`）；有一个平台失败就停在草稿，不会发出缺安装包的版本。
+推送 `v*` tag 后，GitHub Actions（`.github/workflows/release.yml`）会打包 Windows（`.exe`、`.msi`）、macOS（Apple 芯片、Intel 各一个 `.dmg`）和 Linux x64（`.deb`、`.rpm`、`.AppImage`），所有平台都打包成功后**直接发布**到 Releases（设为 Latest），说明按 PR 的 label 自动分组（`.github/release.yml`）；有一个平台失败就停在草稿，不会发出缺安装包的版本。
 
 1. 开一个 PR 改版本号，合并到 main：
    ```bash

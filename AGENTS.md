@@ -53,7 +53,7 @@ npm test          # = npm run build（tsc + vite build）+ cargo test
 
 - 后端：Rust（`src-tauri/`），负责调用 AutoDL、轮询、规则判断、通知、SQLite 存储、托盘
 - 前端：React 19 + TypeScript + Vite（`src/`），动效用 [Motion](https://motion.dev)（`motion/react`）
-- 主要开发平台：Windows 10/11；也要能在 macOS 上编译运行
+- 主要开发平台：Windows 10/11；也要能在 macOS 和 Linux（发版打 deb / rpm / AppImage）上编译运行
 - 界面语言：简体中文
 
 ## 常用命令
