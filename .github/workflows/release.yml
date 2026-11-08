@@ -1,5 +1,5 @@
-# 发版：推送 v* tag（如 v0.1.0）后打包 Windows / macOS 安装包，挂到一个草稿 Release 上。
-# 维护者在 GitHub 上看过草稿、确认安装包能用后，手动点「Publish release」。
+# 发版：推送 v* tag（如 v0.1.0）后打包 Windows / macOS 安装包，先挂到一个草稿 Release 上，
+# 三个平台全部打包成功后自动发布（设为 Latest）。有一个失败就停在草稿，修好后重跑会接着用这个草稿。
 # 步骤见 README 的「发版」。
 name: 发版
 
@@ -116,3 +116,31 @@ jobs:
         with:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           args: ${{ matrix.args }}
+
+  # 三个平台都成功才会跑到这里（needs 里有失败就跳过），草稿 → 正式发布
+  publish:
+    name: 发布 Release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const release_id = Number(process.env.RELEASE_ID);
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id, per_page: 100 });
+            // macOS 的 .app.tar.gz 是给自动更新用的，还没做自动更新，放在下载列表里容易下错
+            for (const a of assets.filter((a) => a.name.endsWith(".app.tar.gz"))) {
+              await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
+            }
+            const left = assets.filter((a) => !a.name.endsWith(".app.tar.gz")).map((a) => a.name);
+            const want = [/_x64-setup\.exe$/, /_x64_en-US\.msi$/, /_aarch64\.dmg$/, /_x64\.dmg$/];
+            const missing = want.filter((re) => !left.some((n) => re.test(n)));
+            if (missing.length) {
+              core.setFailed(`安装包不全，先不发布（缺 ${missing.join("、")}），Release 保持草稿`);
+              return;
+            }
+            await github.rest.repos.updateRelease({ owner, repo, release_id, draft: false, make_latest: "true" });
+            core.info(`已发布：${left.join("、")}`);
