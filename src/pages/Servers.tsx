@@ -310,7 +310,7 @@ function Editor({ init, onSaved }: { init: ServerRecord; onSaved: () => void }) 
     <>
       <div className="group-label">基本</div>
       <Group>
-        <FormRow icon="text" label="名称"><input className="inline-input" value={sv.name} placeholder="如 实验室 A100" onChange={(e) => set("name", e.target.value)} /></FormRow>
+        <FormRow icon="text" label="名称"><input className="inline-input" value={sv.name} placeholder="如 实验室 3080" onChange={(e) => set("name", e.target.value)} /></FormRow>
         <FormRow icon="server" label="主机"><input className="inline-input" value={sv.host} placeholder="域名或 IP" onChange={(e) => set("host", e.target.value)} /></FormRow>
         <FormRow icon="number" label="端口"><Stepper value={sv.port} min={1} max={65535} onChange={(p) => set("port", p)} /></FormRow>
         <FormRow icon="text" label="用户"><input className="inline-input" value={sv.user} onChange={(e) => set("user", e.target.value)} /></FormRow>

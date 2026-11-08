@@ -75,7 +75,7 @@ const browser = await chromium.launch();
   await tab(p, "抢卡时段"); await shot("analysis");
   await tab(p, "我的实例"); await shot("instances");
   await tab(p, "服务器"); await wait(p, 800); await shot("servers");
-  await p.getByText("实验室 A100").first().click();
+  await p.getByText("实验室 3080").first().click();
   await wait(p, 2500);
   await shot("server-live");
   await p.getByRole("button", { name: "完成" }).click();
@@ -96,7 +96,7 @@ const browser = await chromium.launch();
   await wait(p, 2400);
   await glide(p, p.getByRole("tab", { name: /^服务器/ }));
   await wait(p, 1600);
-  await glide(p, p.getByText("实验室 A100").first());               // 服务器实时状态
+  await glide(p, p.getByText("实验室 3080").first());               // 服务器实时状态
   await wait(p, 5000);
   const video = await p.video().path();
   await ctx.close();

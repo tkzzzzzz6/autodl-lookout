@@ -92,18 +92,18 @@ const liveSeeded = new Set<string>();
 export function mockListenLive(cb: (e: LiveEvent) => void) { liveListeners.add(cb); return () => { liveListeners.delete(cb); }; }
 function fakeStatus(id: string, at = now()) {
   const lab = id === "srv:1";
-  const util = lab ? [97, 88, 0, 0, 100, 63, 0, 2] : id.startsWith("autodl:") ? [1, 0] : [];
+  const util = lab ? [96, 58] : id.startsWith("autodl:") ? [1, 0] : [];
   const t = at;
   const wob = (u: number, i: number) => (u > 3 ? Math.max(0, Math.min(100, Math.round(u - 8 + 8 * Math.sin(t / 7 + i) + Math.random() * 6))) : u);
-  const gpus = util.map((u0, i) => wob(u0, i)).map((u, i) => ({ index: i, uuid: `GPU-${i}`, name: lab ? "NVIDIA A100-SXM4-80GB" : "NVIDIA GeForce RTX 4090",
-    util: u, mem_used_mb: u > 3 ? 61234 + i * 900 : 4, mem_total_mb: lab ? 81920 : 24564, temp: 30 + u / 3, power_w: 60 + u * 3 }));
+  const gpus = util.map((u0, i) => wob(u0, i)).map((u, i) => ({ index: i, uuid: `GPU-${i}`, name: lab ? "NVIDIA GeForce RTX 3080" : "NVIDIA GeForce RTX 4090",
+    util: u, mem_used_mb: u > 3 ? (lab ? 8650 - i * 1900 : 21234 + i * 900) : 4, mem_total_mb: lab ? 10240 : 24564, temp: 30 + u / 3, power_w: lab ? 30 + u * 2.9 : 60 + u * 3 }));
   const users = ["zhangsan", "lisi", "tk"];
   return {
     nvidia: gpus.length > 0, gpus,
     procs: gpus.filter((g) => g.util > 3).map((g, i) => ({ gpu: g.index, pid: 12000 + g.index, mem_mb: g.mem_used_mb - 500, user: lab ? users[i % 3] : null,
       elapsed_secs: lab ? 3600 * (i + 2) : null, cmd: lab ? `python train.py --cfg configs/exp${i}.yaml` : null })),
-    load1: lab ? 23.5 + 4 * Math.sin(t / 11) : 0.4 + 0.2 * Math.sin(t / 5), cores: lab ? 128 : 16, mem_total: lab ? 1081234567890 : 64e9, mem_avail: lab ? 512345678901 : 51e9,
-    disks: lab ? [{ mount: "/", total: 1e12, used: 6.1e11 }, { mount: "/home", total: 8e12, used: 7.4e12 }]
+    load1: lab ? 9.5 + 2 * Math.sin(t / 11) : 0.4 + 0.2 * Math.sin(t / 5), cores: lab ? 24 : 16, mem_total: lab ? 64e9 : 64e9, mem_avail: lab ? 25e9 : 51e9,
+    disks: lab ? [{ mount: "/", total: 5e11, used: 3.1e11 }, { mount: "/data", total: 4e12, used: 3.7e12 }]
       : [{ mount: "/", total: 3e10, used: 1.2e10 }, { mount: "/root/autodl-tmp", total: 5e10, used: 4.6e10 }],
     job_alive: watches[id]?.job_pid ? true : null, log_mtime: null, remote_now: null, fetched_at: at,
   };
@@ -112,7 +112,7 @@ function fakeStatus(id: string, at = now()) {
 let autoSync = false;
 let ownKey: string | null = null;
 let myServers: ServerRecord[] = [
-  { id: 1, name: "实验室 A100", host: "10.12.0.20", port: 22, user: "tk", auth: "key", key_path: null, alias: null, note: "8 × A100 80G，组里共用" },
+  { id: 1, name: "实验室 3080", host: "10.12.0.20", port: 22, user: "tk", auth: "key", key_path: null, alias: null, note: "2 × RTX 3080，组里共用" },
   { id: 2, name: "阿里云", host: "47.100.12.9", port: 22, user: "root", auth: "password", key_path: null, alias: null, note: null },
 ];
 
