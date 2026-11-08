@@ -1,5 +1,6 @@
-# 发版：推送 v* tag（如 v0.1.0）后打包 Windows / macOS / Linux 安装包，先挂到一个草稿 Release 上，
-# 所有平台全部打包成功后自动发布（设为 Latest）。有一个失败就停在草稿，修好后重跑会接着用这个草稿。
+# 发版：推送 v* tag（如 v0.1.0）后打包 Windows / macOS / Linux 安装包，全部成功后一次性创建并发布 Release（设为 Latest）。
+# 打包过程中不碰 Release：各平台的安装包先作为这次运行的 artifact 存着，有一个平台失败就什么都不发布；
+# 偶发问题修好后在这次运行里点「Re-run failed jobs」，已经成功的平台不用重打。
 # 步骤见 README 的「发版」。
 name: 发版
 
@@ -11,6 +12,10 @@ on:
       tag:
         description: "要打包的 tag（如 v0.1.0），必须已经推送到 GitHub"
         required: true
+      dry_run:
+        description: "只打包、核对，不发布（试新的发版流程用，安装包在这次运行的 Artifacts 里）"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -23,12 +28,9 @@ env:
   TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
-  # 检查版本号，建（或找到）草稿 Release，后面几个打包任务都往这一个上挂，避免并发时建出好几个
   prepare:
-    name: 检查版本号、建草稿 Release
+    name: 检查版本号
     runs-on: ubuntu-latest
-    outputs:
-      release_id: ${{ steps.release.outputs.result }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,45 +40,22 @@ jobs:
           node-version: 22
       - name: tag 和三处版本号一致
         run: node scripts/version.mjs check "$TAG"
-      - name: 建草稿 Release
-        id: release
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const tag = process.env.TAG;
-            const { owner, repo } = context.repo;
-            // 重跑时复用已有的 Release（草稿用 getReleaseByTag 查不到，所以翻列表）
-            const all = await github.paginate(github.rest.repos.listReleases, { owner, repo, per_page: 100 });
-            const found = all.find((r) => r.tag_name === tag);
-            if (found) {
-              if (!found.draft) core.setFailed(`${tag} 已经发布过了，不要覆盖已发布的安装包。要重新发就换一个版本号。`);
-              return found.id;
-            }
-            const body = [
-              "## 下载",
-              "",
-              "| 系统 | 文件 |",
-              "|---|---|",
-              "| Windows 10 / 11（推荐） | `AutoDL.Lookout_*_x64-setup.exe` |",
-              "| Windows（批量部署） | `AutoDL.Lookout_*_x64_en-US.msi` |",
-              "| macOS（Apple 芯片 M1–M4） | `AutoDL.Lookout_*_aarch64.dmg` |",
-              "| macOS（Intel） | `AutoDL.Lookout_*_x64.dmg` |",
-              "| Linux：Debian / Ubuntu | `AutoDL.Lookout_*_amd64.deb` |",
-              "| Linux：Fedora / openSUSE | `AutoDL.Lookout-*.x86_64.rpm` |",
-              "| Linux：其他发行版（免安装） | `AutoDL.Lookout_*_amd64.AppImage`（下载后 `chmod +x` 再运行） |",
-              "",
-              "安装包没有代码签名：",
-              "- Windows 第一次运行如果弹出「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」",
-              "- macOS 提示「无法打开」时，在「系统设置 → 隐私与安全性」里点「仍要打开」",
-              "",
-              "Linux 需要桌面环境有系统托盘（GNOME 要装 AppIndicator 扩展）和钥匙串服务（gnome-keyring 或 KWallet），没有钥匙串时服务器密码存不了。",
-              "",
-            ].join("\n");
-            const { data } = await github.rest.repos.createRelease({
-              owner, repo, tag_name: tag, name: `显卡管家 ${tag}`, body,
-              draft: true, prerelease: false, generate_release_notes: true,
-            });
-            return data.id;
+      - name: 这个版本还没发布过
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 草稿用 tag 查不到，所以翻列表
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | \"\(.id) \(.draft)\"" |
+          while read -r id draft; do
+            if [ "$draft" = "true" ]; then
+              echo "删掉旧流程留下的草稿 $id"
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+            else
+              echo "::error::$TAG 已经发布过了，不覆盖已发布的安装包。要重新发就换一个版本号。"
+              exit 1
+            fi
+          done
 
   build:
     name: 打包（${{ matrix.name }}）
@@ -86,21 +65,25 @@ jobs:
       matrix:
         include:
           - name: Windows x64
+            key: windows-x64
             os: windows-latest
             args: ""
             targets: ""
           - name: macOS Apple 芯片
+            key: macos-aarch64
             os: macos-latest
             args: "--target aarch64-apple-darwin"
             targets: aarch64-apple-darwin
           - name: macOS Intel
+            key: macos-x64
             os: macos-latest
             args: "--target x86_64-apple-darwin"
             targets: x86_64-apple-darwin
           # 用较老的 Ubuntu 构建，glibc 版本低，能在更多发行版上运行
           - name: Linux x64
+            key: linux-x64
             os: ubuntu-22.04
-            args: ""
+            args: "--verbose"
             targets: ""
     runs-on: ${{ matrix.os }}
     steps:
@@ -111,7 +94,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev
+          # libfuse2：打 AppImage 用的 linuxdeploy 本身是 AppImage，要 FUSE 才能运行
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev libfuse2
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -122,41 +106,76 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
-          key: ${{ matrix.targets || 'native' }}
+          key: ${{ matrix.key }}
       - run: npm ci
-      - name: 打包并上传到草稿 Release
-        uses: tauri-apps/tauri-action@v0
+      - name: 清掉缓存里可能残留的旧版本安装包
+        shell: bash
+        run: rm -rf src-tauri/target/release/bundle src-tauri/target/*/release/bundle
+      - name: 打包
+        run: npm run tauri build -- ${{ matrix.args }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 没有 FUSE 时让 linuxdeploy 解压后运行（只对 Linux 有用）
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+      - name: 存下安装包
+        uses: actions/upload-artifact@v4
         with:
-          releaseId: ${{ needs.prepare.outputs.release_id }}
-          args: ${{ matrix.args }}
+          name: bundle-${{ matrix.key }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            src-tauri/target/**/release/bundle/nsis/*.exe
+            src-tauri/target/**/release/bundle/msi/*.msi
+            src-tauri/target/**/release/bundle/dmg/*.dmg
+            src-tauri/target/**/release/bundle/deb/*.deb
+            src-tauri/target/**/release/bundle/rpm/*.rpm
+            src-tauri/target/**/release/bundle/appimage/*.AppImage
 
-  # 所有平台都成功才会跑到这里（needs 里有失败就跳过），草稿 → 正式发布
+  # 所有平台都成功才会跑到这里（needs 里有失败就跳过），一次性创建并发布
   publish:
     name: 发布 Release
     needs: [prepare, build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v7
-        env:
-          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+      - uses: actions/download-artifact@v4
         with:
-          script: |
-            const { owner, repo } = context.repo;
-            const release_id = Number(process.env.RELEASE_ID);
-            const assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id, per_page: 100 });
-            // macOS 的 .app.tar.gz 是给自动更新用的，还没做自动更新，放在下载列表里容易下错
-            for (const a of assets.filter((a) => a.name.endsWith(".app.tar.gz"))) {
-              await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
-            }
-            const left = assets.filter((a) => !a.name.endsWith(".app.tar.gz")).map((a) => a.name);
-            const want = [/_x64-setup\.exe$/, /_x64_en-US\.msi$/, /_aarch64\.dmg$/, /_x64\.dmg$/,
-              /_amd64\.deb$/, /\.x86_64\.rpm$/, /_amd64\.AppImage$/];
-            const missing = want.filter((re) => !left.some((n) => re.test(n)));
-            if (missing.length) {
-              core.setFailed(`安装包不全，先不发布（缺 ${missing.join("、")}），Release 保持草稿`);
-              return;
-            }
-            await github.rest.repos.updateRelease({ owner, repo, release_id, draft: false, make_latest: "true" });
-            core.info(`已发布：${left.join("、")}`);
+          pattern: bundle-*
+          path: dist
+          merge-multiple: true
+      - name: 整理文件名、核对安装包齐全
+        run: |
+          mkdir -p out
+          # 文件名里的空格换成点（GitHub 上传时也会这么换），说明里的文件名才对得上
+          find dist -type f -print0 | while IFS= read -r -d '' f; do
+            b=$(basename "$f"); mv "$f" "out/${b// /.}"
+          done
+          ls -la out
+          for p in '_x64-setup\.exe' '_x64_en-US\.msi' '_aarch64\.dmg' '_x64\.dmg' '_amd64\.deb' '\.x86_64\.rpm' '_amd64\.AppImage'; do
+            ls out | grep -qE -- "${p}\$" || { echo "::error::安装包不全，缺 *${p//\\/}，不发布"; exit 1; }
+          done
+      - name: 发布
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'MD'
+          ## 下载
+
+          | 系统 | 文件 |
+          |---|---|
+          | Windows 10 / 11（推荐） | `AutoDL.Lookout_*_x64-setup.exe` |
+          | Windows（批量部署） | `AutoDL.Lookout_*_x64_en-US.msi` |
+          | macOS（Apple 芯片 M1–M4） | `AutoDL.Lookout_*_aarch64.dmg` |
+          | macOS（Intel） | `AutoDL.Lookout_*_x64.dmg` |
+          | Linux：Debian / Ubuntu | `AutoDL.Lookout_*_amd64.deb` |
+          | Linux：Fedora / openSUSE | `AutoDL.Lookout-*.x86_64.rpm` |
+          | Linux：其他发行版（免安装） | `AutoDL.Lookout_*_amd64.AppImage`（下载后 `chmod +x` 再运行） |
+
+          安装包没有代码签名：
+          - Windows 第一次运行如果弹出「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」
+          - macOS 提示「无法打开」时，在「系统设置 → 隐私与安全性」里点「仍要打开」
+
+          Linux 需要桌面环境有系统托盘（GNOME 要装 AppIndicator 扩展）和钥匙串服务（gnome-keyring 或 KWallet），没有钥匙串时服务器密码存不了。
+
+          MD
+          gh release create "$TAG" out/* -R "$GITHUB_REPOSITORY" --verify-tag --latest \
+            --title "显卡管家 $TAG" --notes-file notes.md --generate-notes

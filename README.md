@@ -137,7 +137,7 @@ src/
 
 ## 发版
 
-推送 `v*` tag 后，GitHub Actions（`.github/workflows/release.yml`）会打包 Windows（`.exe`、`.msi`）、macOS（Apple 芯片、Intel 各一个 `.dmg`）和 Linux x64（`.deb`、`.rpm`、`.AppImage`），所有平台都打包成功后**直接发布**到 Releases（设为 Latest），说明按 PR 的 label 自动分组（`.github/release.yml`）；有一个平台失败就停在草稿，不会发出缺安装包的版本。
+推送 `v*` tag 后，GitHub Actions（`.github/workflows/release.yml`）会打包 Windows（`.exe`、`.msi`）、macOS（Apple 芯片、Intel 各一个 `.dmg`）和 Linux x64（`.deb`、`.rpm`、`.AppImage`），所有平台都打包成功后一次性创建并**直接发布**到 Releases（设为 Latest），说明按 PR 的 label 自动分组（`.github/release.yml`）。打包过程中不会建草稿；有一个平台失败就什么都不发布，不会发出缺安装包的版本。
 
 **顺序很重要：先改版本号并合并到 main，再打 tag。** 发版时会检查 tag 和版本号是否一致（`v0.2.0` 对应版本号 `0.2.0`），对不上会直接失败。
 
@@ -168,7 +168,8 @@ src/
   git tag v0.2.0
   git push origin v0.2.0
   ```
-- **某个平台打包失败**：Release 停在草稿。到 Actions 看是哪个平台、什么错；偶发问题（网络等）在那次运行里点「Re-run failed jobs」，会接着用原来的草稿。要改代码才能修好的，先删掉这个草稿和 tag，修好合并后换一个新版本号重新发。
+- **某个平台打包失败**：什么都不会发布。到 Actions 看是哪个平台、什么错；偶发问题（网络等）在那次运行里点「Re-run failed jobs」，已经成功的平台不用重打，全部成功后自动发布。要改代码才能修好的，修好合并后按「tag 打早了」的办法删掉 tag 在新提交上重打（没发布过的版本号可以继续用）。
+- **想先试试发版流程**：在 Actions 页面手动运行「发版」，填一个已推送的 tag，勾上「只打包、核对，不发布」，安装包会出现在这次运行的 Artifacts 里。
 - **已经发布的版本不会被覆盖**：发出去后发现问题，修好后发下一个版本号（如 `0.2.1`）。
 
 也可以在 Actions 页面手动运行「发版」，填一个已经推送的 tag。
