@@ -111,6 +111,15 @@ jobs:
       - name: 清掉缓存里可能残留的旧版本安装包
         shell: bash
         run: rm -rf src-tauri/target/release/bundle src-tauri/target/*/release/bundle
+      # appimagetool 打包时自己去 GitHub 下载 AppImage runtime，失败一次（504）就整个失败、没有重试。
+      # 先用带重试的 curl 下好，通过 LDAI_RUNTIME_FILE 交给 linuxdeploy 的 appimage 插件
+      - name: 下载 AppImage runtime
+        if: runner.os == 'Linux'
+        run: |
+          f="$RUNNER_TEMP/appimage-runtime-x86_64"
+          curl -fsSL --retry 10 --retry-all-errors --retry-delay 5 -o "$f" \
+            https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64
+          echo "LDAI_RUNTIME_FILE=$f" >> "$GITHUB_ENV"
       - name: 打包
         run: npm run tauri build -- ${{ matrix.args }}
         env:
