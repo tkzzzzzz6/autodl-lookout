@@ -133,7 +133,7 @@ design/         设计稿 SVG（B2 风格）和应用图标源文件
 - 用户粘贴的凭证可能带 `Bearer `、引号、换行，统一走 `api::clean_token`。
 - 应用曾叫 `autodl-manager`，应用标识也从 `dev.local.autodl-lookout` 改成了 `io.github.tkzzzzzz6.autodl-lookout`：`lib.rs` 的 `migrate_legacy_db`（`LEGACY_DBS`）和 `secret.rs` 的 `LEGACY_SERVICE` 负责把旧数据搬过来，不要删。钥匙串服务名 `secret::SERVICE` 故意没跟着标识改，也不要改。
 - 应用标识（`tauri.conf.json` 的 `identifier`）决定数据目录，发版后不要再改。
-- 发版只通过推送 `v*` tag 触发（`.github/workflows/release.yml`），三个平台都打包成功后自动发布，所以打 tag 就等于发版。Agent 不要打 tag、不要发布 Release；改版本号用 `npm run version:set`，三处版本号必须一致（CI 会检查）。
+- 发版只通过推送 `v*` tag 触发（`.github/workflows/release.yml`），各平台先打包成 artifact，全部成功后一次性创建并发布 Release（不建草稿），所以打 tag 就等于发版；手动运行时可以勾「只打包不发布」试流程。Agent 不要打 tag、不要发布 Release；改版本号用 `npm run version:set`，三处版本号必须一致（CI 会检查）。
 
 ## 安全和钱
 
