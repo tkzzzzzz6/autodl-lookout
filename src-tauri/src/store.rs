@@ -5,6 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -125,6 +126,8 @@ impl Store {
     }
 
     fn init(conn: Connection) -> R<Self> {
+        // 自动动作占名额用 BEGIN IMMEDIATE 加写锁；另一个连接正占着锁时等一会儿而不是直接报 busy
+        conn.busy_timeout(Duration::from_secs(5)).map_err(e)?;
         conn.execute_batch(
             r#"
             PRAGMA journal_mode=WAL;
@@ -157,6 +160,7 @@ impl Store {
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, level TEXT NOT NULL,
                 kind TEXT NOT NULL, rule_id INTEGER, message TEXT NOT NULL
             );
+            CREATE INDEX IF NOT EXISTS idx_logs_rule ON logs(rule_id, kind, ts);
             "#,
         )
         .map_err(e)?;
@@ -509,6 +513,41 @@ impl Store {
         )
         .map_err(e)
     }
+
+    /// 自动动作先占名额再执行：在一个写事务里数今天的次数，没到上限就先写一条「执行中」的 auto 日志，
+    /// 返回它的 id；到了上限返回 None。
+    /// 日志如果等调用 AutoDL 之后才写，两个并发的执行（比如同时开了两个进程）会都读到「还没用过」，
+    /// 每日上限就被绕过了。BEGIN IMMEDIATE 一开始就拿写锁，其他连接（包括别的进程）只能排队，
+    /// 读到的一定是前一个已经占好的名额。程序在执行中途退出时这条记录留着，照样计数，方向是安全的。
+    pub fn reserve_auto_action(&self, rule_id: i64, since_ts: i64, limit: i64, ts: i64) -> R<Option<i64>> {
+        let mut c = self.conn.lock().unwrap();
+        let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(e)?;
+        let used: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM logs WHERE kind='auto' AND rule_id=?1 AND ts>=?2",
+                [rule_id, since_ts],
+                |r| r.get(0),
+            )
+            .map_err(e)?;
+        if used >= limit.max(0) {
+            return Ok(None);
+        }
+        tx.execute(
+            "INSERT INTO logs(ts,level,kind,rule_id,message) VALUES(?1,'info','auto',?2,'自动动作执行中…')",
+            params![ts, rule_id],
+        )
+        .map_err(e)?;
+        let id = tx.last_insert_rowid();
+        tx.commit().map_err(e)?;
+        Ok(Some(id))
+    }
+
+    /// 自动动作执行完，把占名额时写的那条日志改成结果（时间不动，仍然算在当天）
+    pub fn finish_auto_action(&self, log_id: i64, level: &str, msg: &str) -> R<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute("UPDATE logs SET level=?1, message=?2 WHERE id=?3", params![level, msg, log_id]).map_err(e)?;
+        Ok(())
+    }
 }
 
 /// 给老数据库补上后来新增的列（新增列都有默认值，老规则行为不变）
@@ -614,6 +653,53 @@ mod tests {
         s2.kv_set("settings", r#"{"regions":["chongqingDC1"]}"#).unwrap();
         s2.migrate_default_regions().unwrap();
         assert_eq!(s2.settings().regions, vec!["chongqingDC1"]);
+    }
+
+    #[test]
+    fn auto_action_reservation_respects_daily_limit() {
+        let s = Store::open_in_memory().unwrap();
+        let id = s.reserve_auto_action(7, 1000, 2, 1500).unwrap().expect("first slot");
+        // 占名额时就已经计数，不用等执行完
+        assert_eq!(s.auto_actions_since(7, 1000).unwrap(), 1);
+        s.finish_auto_action(id, "error", "自动动作失败：余额不足").unwrap();
+        // 失败也计数（保持原来的行为）
+        assert_eq!(s.auto_actions_since(7, 1000).unwrap(), 1);
+        let log = s.logs(10).unwrap().into_iter().find(|l| l.id == id).unwrap();
+        assert_eq!((log.level.as_str(), log.kind.as_str(), log.ts), ("error", "auto", 1500));
+        assert!(s.reserve_auto_action(7, 1000, 2, 1600).unwrap().is_some());
+        assert!(s.reserve_auto_action(7, 1000, 2, 1700).unwrap().is_none(), "limit reached");
+        // 别的规则、第二天各算各的
+        assert!(s.reserve_auto_action(8, 1000, 2, 1700).unwrap().is_some());
+        assert!(s.reserve_auto_action(7, 2000, 2, 2100).unwrap().is_some());
+        // 上限 0 或负数：一次都不执行
+        assert!(s.reserve_auto_action(9, 1000, 0, 1700).unwrap().is_none());
+        assert!(s.reserve_auto_action(9, 1000, -1, 1700).unwrap().is_none());
+    }
+
+    #[test]
+    fn concurrent_reservations_across_connections_never_exceed_limit() {
+        // 模拟两个进程：两个 Store 打开同一个数据库文件，多个线程同时抢上限为 1 的名额
+        let dir = std::env::temp_dir().join(format!("lookout-reserve-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("t.sqlite3");
+        let a = std::sync::Arc::new(Store::open(&db).unwrap());
+        let b = std::sync::Arc::new(Store::open(&db).unwrap());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let s = if i % 2 == 0 { a.clone() } else { b.clone() };
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    s.reserve_auto_action(1, 0, 1, 10).unwrap().is_some()
+                })
+            })
+            .collect();
+        let won = handles.into_iter().map(|h| h.join().unwrap()).filter(|&w| w).count();
+        assert_eq!(won, 1);
+        assert_eq!(a.auto_actions_since(1, 0).unwrap(), 1);
+        drop((a, b));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

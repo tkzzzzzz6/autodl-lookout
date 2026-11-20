@@ -684,6 +684,19 @@ impl Monitor {
             }
             _ => {}
         }
+        // 上面那次计数只是为了到了上限就别再去查余额；真正的把关在这里：
+        // 数次数和占名额在同一个写事务里，并发执行（多个进程、手动和自动同时）也不会超过上限
+        let reserved = match self.store.reserve_auto_action(rule.id, local_midnight_ts(), rule.daily_limit, now()) {
+            Ok(Some(id)) => id,
+            Ok(None) => {
+                self.log("warn", "skip", Some(rule.id), &format!("今日自动动作已达上限 {}，跳过", rule.daily_limit));
+                return;
+            }
+            Err(e) => {
+                self.log("warn", "skip", Some(rule.id), &format!("无法确认今日自动动作次数（{e}），跳过"));
+                return;
+            }
+        };
 
         let result: Result<String, String> = match rule.action.as_str() {
             "create" => match rule.template_id.and_then(|id| self.store.template(id).ok().flatten()) {
@@ -715,11 +728,11 @@ impl Monitor {
         };
         match result {
             Ok(msg) => {
-                self.log("info", "auto", Some(rule.id), &msg);
+                let _ = self.store.finish_auto_action(reserved, "info", &msg);
                 crate::notify::send(app, "自动抢卡成功", &msg);
             }
             Err(e) => {
-                self.log("error", "auto", Some(rule.id), &format!("自动动作失败：{e}"));
+                let _ = self.store.finish_auto_action(reserved, "error", &format!("自动动作失败：{e}"));
                 crate::notify::send(app, "自动抢卡失败", &e);
             }
         }

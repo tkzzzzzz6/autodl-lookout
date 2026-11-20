@@ -25,7 +25,17 @@ pub struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // 必须最先注册：第二个进程启动时把已有窗口拉到前台，然后自己退出，
+    // 避免两个进程同时轮询（重复提醒、自动动作重复执行）
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        // 开机自启带 --minimized 的那次不弹窗
+        if !args.iter().any(|a| a == "--minimized") {
+            tray::show_main(app);
+        }
+    }));
+    builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
